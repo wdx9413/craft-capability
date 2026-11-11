@@ -4,6 +4,8 @@ coverage/
 __pycache__/
 *.pyc
 *.pyo
+*.orig
+*.rej
 # Generated JS/declarations from local builds; sources are .ts only.
 capability/**/*.js
 capability/**/*.d.ts
