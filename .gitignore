@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.pyc
+*.pyo
+# Generated JS/declarations from local builds; sources are .ts only.
+capability/**/*.js
+capability/**/*.d.ts
+# Junctions to craft-common packages are local wiring, not tracked content.
+common/

@@ -1,0 +1,17 @@
+{
+  "name": "craft-capability",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Craft capability restructure workspace (proof-of-concept: craft-datasec)",
+  "scripts": {
+    "typecheck:datasec": "pnpm --filter @craft/capability-datasec typecheck"
+  },
+  "engines": {
+    "node": ">=23"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/node": "^24.0.0"
+  }
+}
+
