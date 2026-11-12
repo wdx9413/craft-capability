@@ -9,31 +9,51 @@
       "types": "./dist/capability.d.ts",
       "default": "./dist/capability.js"
     },
-    "./ownership": {
-      "types": "./dist/ownership.d.ts",
-      "default": "./dist/ownership.js"
+    "./capability": {
+      "types": "./dist/capability.d.ts",
+      "default": "./dist/capability.js"
     },
-    "./memory-ledger": {
-      "types": "./dist/memory-ledger.d.ts",
-      "default": "./dist/memory-ledger.js"
-    },
-    "./package.json": "./package.json",
-    "./memory-governance": {
-      "types": "./dist/memory-governance.d.ts",
-      "default": "./dist/memory-governance.js"
-    },
-    "./memory-capture": {
-      "types": "./dist/memory-capture.d.ts",
-      "default": "./dist/memory-capture.js"
+    "./context-feedback-weight": {
+      "types": "./dist/context-feedback-weight.d.ts",
+      "default": "./dist/context-feedback-weight.js"
     },
     "./contribution": {
       "types": "./dist/contribution.d.ts",
       "default": "./dist/contribution.js"
     },
+    "./memory-capture": {
+      "types": "./dist/memory-capture.d.ts",
+      "default": "./dist/memory-capture.js"
+    },
+    "./memory-files": {
+      "types": "./dist/memory-files.d.ts",
+      "default": "./dist/memory-files.js"
+    },
+    "./memory-governance": {
+      "types": "./dist/memory-governance.d.ts",
+      "default": "./dist/memory-governance.js"
+    },
+    "./memory-ledger": {
+      "types": "./dist/memory-ledger.d.ts",
+      "default": "./dist/memory-ledger.js"
+    },
+    "./memory-legacy-field": {
+      "types": "./dist/memory-legacy-field.d.ts",
+      "default": "./dist/memory-legacy-field.js"
+    },
+    "./memory-signals-kernel": {
+      "types": "./dist/memory-signals-kernel.d.ts",
+      "default": "./dist/memory-signals-kernel.js"
+    },
     "./memory-signals": {
       "types": "./dist/memory-signals.d.ts",
       "default": "./dist/memory-signals.js"
-    }
+    },
+    "./ownership": {
+      "types": "./dist/ownership.d.ts",
+      "default": "./dist/ownership.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -52,5 +72,9 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }

@@ -1,4 +1,4 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 
 const GATE_KIND = "experience_procedure_gate";
 const FAILED_PENALTY = 0.2;

@@ -1,7 +1,7 @@
 /** Normalize LSP DocumentSymbol responses. The caller runs its language server on the pinned checkpoint. */
 import { createHash } from "node:crypto";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 import { lspDeclarationKind } from "./symbol-kind.ts";
 
 const MAX_LSP_SYMBOLS = 60_000;

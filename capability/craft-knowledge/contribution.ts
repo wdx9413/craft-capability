@@ -1,4 +1,4 @@
-import { observeOperation } from '../../common/craft-common-log/src/index.ts';
+import { observeOperation } from 'craft-common-log/index';
 /**
  * The governed Knowledge read side.
  *
@@ -7,21 +7,21 @@ import { observeOperation } from '../../common/craft-common-log/src/index.ts';
  * an execution Host.  Keeping that distinction here prevents an import or a
  * draft Wiki page from silently changing future behaviour.
  */
-import type { ContextContribution, ContextContributionProvider, ContextRequest } from '../../common/craft-common-base/src/capability-protocol.ts';
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { ContextReadGuard, type ContextReadRef } from '../../common/craft-common-store-local/src/context-access-guard.ts';
-import { contentReference } from '../../common/craft-common-store-local/src/content-store.ts';
-import { scopeAllows, scopeEnvelope, sourceAllows, type ScopeAccess } from '../../common/craft-common-base/src/scope-policy.ts';
-import { KeywordRetrievalPort } from '../../common/craft-common-base/src/keyword-retrieval.ts';
-import { retrievalExcerpt } from '../../common/craft-common-base/src/retrieval-excerpt.ts';
-import { contextAssetMatches, contextAssetRef } from '../../common/craft-common-base/src/context-assets.ts';
+import type { ContextContribution, ContextContributionProvider, ContextRequest } from 'craft-common-base/capability-protocol';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { ContextReadGuard, type ContextReadRef } from 'craft-common-store-local/context-access-guard';
+import { contentReference } from 'craft-common-store-local/content-store';
+import { scopeAllows, scopeEnvelope, sourceAllows, type ScopeAccess } from 'craft-common-base/scope-policy';
+import { KeywordRetrievalPort } from 'craft-common-base/keyword-retrieval';
+import { retrievalExcerpt } from 'craft-common-base/retrieval-excerpt';
+import { contextAssetMatches, contextAssetRef } from 'craft-common-base/context-assets';
 import { knowledgeClaimPromotionProofVerified } from "./knowledge-evaluation-provenance.ts";
-import { contextFeedbackWeights } from "../craft-memory/context-feedback-weight.ts";
+import { contextFeedbackWeights } from "@craft/capability-memory/context-feedback-weight";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import { stableDigest } from 'craft-common-base/digest';
 
 const inFlightFileVerifications = new Map<string, Promise<boolean>>();
 

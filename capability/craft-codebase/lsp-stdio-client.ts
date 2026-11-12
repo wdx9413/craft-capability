@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { relative, resolve, isAbsolute, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 import { MAX_LSP_DOCUMENTS, MAX_RELATION_SYMBOLS } from "./lsp-config.ts";
 import { cacheLspDocumentSymbols, lspDocumentSymbolsDigest, normalizeLspSymbols } from "./lsp-adapter.ts";
 import { collectLspRelations, selectLspRelationSymbols } from "./lsp-relations.ts";

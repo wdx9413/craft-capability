@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { object, text } from '../../common/craft-common-base/src/validation.ts';
-import { digestJson } from '../../common/craft-common-base/src/digest.ts';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { object, text } from 'craft-common-base/validation';
+import { digestJson } from 'craft-common-base/digest';
 import { knowledgeClaimPromotionProofVerified } from "./knowledge-evaluation-provenance.ts";
 
 function array(value: unknown, name: string): unknown[] {

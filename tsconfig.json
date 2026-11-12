@@ -12,11 +12,10 @@
     "skipLibCheck": true,
     "types": ["node"],
     "erasableSyntaxOnly": true,
-    "baseUrl": ".",
     "paths": {
-      "craft-common-base/*": ["common/craft-common-base/src/*"],
-      "craft-common-log/*": ["common/craft-common-log/src/*"],
-      "craft-common-store-local/*": ["common/craft-common-store-local/src/*"]
+      "craft-common-base/*": ["../craft-common/packages/craft-common-base/src/*"],
+      "craft-common-log/*": ["../craft-common/packages/craft-common-log/src/*"],
+      "craft-common-store-local/*": ["../craft-common/packages/craft-common-store-local/src/*"]
     }
   },
   "include": ["capability/craft-datasec/**/*.ts", "capability/craft-knowledge/**/*.ts", "capability/craft-memory/**/*.ts", "capability/craft-experience/**/*.ts", "capability/craft-codebase/**/*.ts", "capability/craft-file-dir-desc/**/*.ts"],

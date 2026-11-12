@@ -1,6 +1,6 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { activeProcedure, belongsToRetiredScenario } from "./procedure-release.ts";
-import { stableDigest, payload } from '../../common/craft-common-base/src/digest.ts';
+import { stableDigest, payload } from 'craft-common-base/digest';
 import { lstatSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";

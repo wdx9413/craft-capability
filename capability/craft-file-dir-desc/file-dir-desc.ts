@@ -13,7 +13,7 @@
  */
 import { isAbsolute, resolve, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
-import { type CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { type CraftStore, type JsonObject } from 'craft-common-store-local/store';
 
 /** Below this count a directory is only "observed"; at/above it becomes "promoted". */
 export const PROMOTION_USE_THRESHOLD = 3;

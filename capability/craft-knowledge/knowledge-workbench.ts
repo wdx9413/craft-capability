@@ -1,5 +1,5 @@
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { contextFeedbackWeights } from "../craft-memory/context-feedback-weight.ts";
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { contextFeedbackWeights } from "@craft/capability-memory/context-feedback-weight";
 
 function limit(value: unknown): number {
   const result = value === undefined ? 50 : Number(value);

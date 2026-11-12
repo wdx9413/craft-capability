@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { ensureProjectStorageDirectory, type CraftPaths } from '../../common/craft-common-store-local/src/paths.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { ensureProjectStorageDirectory, type CraftPaths } from 'craft-common-store-local/paths';
 
 const GRAPH_RECORD_ID = /^codebase_(?:shard|edge_route)_[A-Za-z0-9_-]{1,128}$/u;
 

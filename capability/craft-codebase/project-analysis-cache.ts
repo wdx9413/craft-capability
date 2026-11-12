@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { ensureProjectStorageDirectory, type CraftPaths } from '../../common/craft-common-store-local/src/paths.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { ensureProjectStorageDirectory, type CraftPaths } from 'craft-common-store-local/paths';
 
 const CACHE_KINDS = new Set(["codebase_file_analysis", "codebase_semantic_file_analysis", "codebase_python_file_analysis", "codebase_java_file_analysis", "codebase_lsp_file_analysis"]);
 const CACHE_ID = /^codebase_(?:file|[a-z_]+_file)_[A-Za-z0-9_-]{1,128}$/u;

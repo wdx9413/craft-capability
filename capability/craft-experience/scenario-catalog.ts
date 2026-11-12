@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 
 const SCHEMA = "craft.experience-scenario-catalog.v1";
 const KEY = /^[a-z0-9][a-z0-9._/-]{0,95}$/u;

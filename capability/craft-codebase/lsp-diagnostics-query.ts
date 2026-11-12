@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { projectStorageDirectory } from '../../common/craft-common-store-local/src/paths.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { projectStorageDirectory } from 'craft-common-store-local/paths';
 import { analyzeLspSnapshot, type LspRelationTarget } from "./lsp-stdio-client.ts";
 import { configuredLspWorkerEnvironment, languageIdForFile, readTrustedLspConfig } from "./lsp-config.ts";
 

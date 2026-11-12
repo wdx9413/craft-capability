@@ -1,5 +1,5 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { payload, stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { payload, stableDigest } from 'craft-common-base/digest';
 import { repositoryFiles, repositoryPolicyDigest, repositoryPolicySnapshot, repositoryPolicySnapshotCurrent, repositoryRoot } from "./repository-files.ts";
 import { basicAnalysis } from "./basic-analysis.ts";
 import { analyzeShell } from "./shell-analysis.ts";
@@ -19,7 +19,7 @@ import { lspDocumentSymbolsDigest } from "./lsp-adapter.ts";
 import { CODEBASE_LSP_WORKER_FLAG } from "./lsp-worker.ts";
 import { stageLspSnapshotFiles } from "./lsp-snapshot-files.ts";
 import { ProjectAnalysisCache } from "./project-analysis-cache.ts";
-import { projectStorageDirectory } from '../../common/craft-common-store-local/src/paths.ts';
+import { projectStorageDirectory } from 'craft-common-store-local/paths';
 import type { RepositoryContextFile, RepositoryFile } from "./repository-files.ts";
 import type { LspStdioRequest } from "./lsp-stdio-client.ts";
 export interface RepositoryOnboardingPort {

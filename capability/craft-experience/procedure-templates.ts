@@ -1,4 +1,4 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 
 /** Read-only seed shipped with the Runtime; user revisions live in the data space. */
 const INTERNET_PRODUCT_ENGINEERING: JsonObject = {

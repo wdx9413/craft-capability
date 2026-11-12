@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 import { JAVA_ANALYZER_VERSION, javaFileUnitDigest, type JavaFileUnit } from "./java-incremental.ts";
 import type { RepositoryFile } from "./repository-files.ts";
 

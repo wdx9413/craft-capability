@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { text } from '../../common/craft-common-base/src/validation.ts';
-import { digestJson, payload } from '../../common/craft-common-base/src/digest.ts';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { text } from 'craft-common-base/validation';
+import { digestJson, payload } from 'craft-common-base/digest';
 
 function list(value: unknown, name: string): string[] {
   if (value === undefined) return [];

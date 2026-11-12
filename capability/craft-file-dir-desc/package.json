@@ -4,9 +4,21 @@
   "private": true,
   "description": "Self-evolving registry that maps directories to human-readable semantic descriptions",
   "type": "module",
-  "main": "./index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./index.ts"
+    ".": {
+      "types": "./dist/capability.d.ts",
+      "default": "./dist/capability.js"
+    },
+    "./file-dir-desc": {
+      "types": "./dist/file-dir-desc.d.ts",
+      "default": "./dist/file-dir-desc.js"
+    },
+    "./index": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "dependencies": {
     "craft-common-store-local": "0.20.4",
@@ -14,5 +26,10 @@
   },
   "engines": {
     "node": ">=23"
-  }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "types": "./dist/index.d.ts"
 }

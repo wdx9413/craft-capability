@@ -1,4 +1,4 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 import { analyzeLspSnapshot, type LspStdioRequest } from "./lsp-stdio-client.ts";
 
 export const CODEBASE_LSP_WORKER_FLAG = "--craft-codebase-lsp-worker";

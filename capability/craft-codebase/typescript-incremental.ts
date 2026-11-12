@@ -1,6 +1,6 @@
 import { getTypeScript } from "./typescript-runtime.ts";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 import type { RepositoryFile } from "./repository-files.ts";
 import { typeScriptFileUnitDigest, type TypeScriptFileUnit } from "./typescript-analysis.ts";
 

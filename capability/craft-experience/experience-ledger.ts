@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { ExperienceDeduplicationKernel } from "./experience-deduplication.ts";
 import { randomUUID } from "node:crypto";
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { object, optionalScope } from '../../common/craft-common-base/src/validation.ts';
-import { stableDigest, payload } from '../../common/craft-common-base/src/digest.ts';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { object, optionalScope } from 'craft-common-base/validation';
+import { stableDigest, payload } from 'craft-common-base/digest';
 
 const OBSERVATION_KINDS = new Set(["success", "failure", "correction"]);
 const PATTERN_KINDS = new Set(["success_strategy", "failure_pattern"]);

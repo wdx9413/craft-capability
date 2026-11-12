@@ -1,6 +1,6 @@
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import { EVAL_DOMAINS, type EvalDomain } from '../../common/craft-common-base/src/capability-protocol.ts';
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import { EVAL_DOMAINS, type EvalDomain } from 'craft-common-base/capability-protocol';
+import type { JsonObject } from 'craft-common-store-local/store';
 
 export const AUTOMATIC_SIGNOFF_POLICY = "craft:auto-signoff:all-prior-gates-passed.v1";
 const STAGES = ["shadow", "held_out", "signoff", "canary"] as const;

@@ -1,9 +1,9 @@
 import { assertProcedureTestIsolation, selectedProcedure } from "./procedure-release.ts";
 import { selectGraph } from "./procedure-graph.ts";
 /** Entry/exit contracts compile to Host plans; this module never executes steps. */
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import { scopeAccess, scopeAllows, scopeEnvelope, scopeFromKey } from '../../common/craft-common-base/src/scope-policy.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
+import { scopeAccess, scopeAllows, scopeEnvelope, scopeFromKey } from 'craft-common-base/scope-policy';
 import { ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";
 
 function object(value: unknown, name: string): JsonObject {

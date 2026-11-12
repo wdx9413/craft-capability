@@ -7,9 +7,9 @@
 import { linkSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import type { CraftPaths } from '../../common/craft-common-store-local/src/paths.ts';
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import type { CraftPaths } from 'craft-common-store-local/paths';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { experienceDataDirectory } from "./project-experience-directory.ts";
 
 export type ProcedureKind = "workflow" | "graph";

@@ -1,4 +1,4 @@
-import { observedKernel } from '../../common/craft-common-log/src/index.ts';
+import { observedKernel } from 'craft-common-log/index';
 /**
  * The Experience capability.
  *
@@ -19,10 +19,10 @@ import { observedKernel } from '../../common/craft-common-log/src/index.ts';
  * owns their Workflow/Graph definitions and Markdown-native Prompt bodies. Observation, patterns and candidates
  * stay diagnostic; they cannot become Context merely by existing.
  */
-import type { CraftCapability } from '../../common/craft-common-base/src/capability-protocol.ts';
-import { CORE_KERNELS } from '../../common/craft-common-base/src/capability-protocol.ts';
-import type { CraftStore } from '../../common/craft-common-store-local/src/store.ts';
-import type { ModelProviderSpec } from '../../common/craft-common-base/src/model-compat.ts';
+import type { CraftCapability } from 'craft-common-base/capability-protocol';
+import { CORE_KERNELS } from 'craft-common-base/capability-protocol';
+import type { CraftStore } from 'craft-common-store-local/store';
+import type { ModelProviderSpec } from 'craft-common-base/model-compat';
 import { ExperienceContribution } from "./contribution.ts";
 import { EvaluationModelProfileKernel } from "./evaluation-model-profile.ts";
 import { ExperienceLedgerKernel } from "./experience-ledger.ts";

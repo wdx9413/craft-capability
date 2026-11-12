@@ -1,8 +1,8 @@
 import { linkSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { withContextLockBudget, type CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import { withContextLockBudget, type CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 import { knowledgeDirectoryForScope, projectKnowledgeContentDirectory } from "./project-knowledge-content.ts";
 
 /** Repair a bounded page. The original immutable version remains readable. */

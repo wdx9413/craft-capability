@@ -1,8 +1,8 @@
 import { realpathSync } from "node:fs";
 import { relative, isAbsolute, sep } from "node:path";
-import { text } from '../../common/craft-common-base/src/validation.ts';
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { payload } from '../../common/craft-common-base/src/digest.ts';
+import { text } from 'craft-common-base/validation';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { payload } from 'craft-common-base/digest';
 import { experienceScenarioIsRetired } from "./scenario-catalog.ts";
 import { projectExperienceDirectory } from "./project-experience-directory.ts";
 

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { text } from '../../common/craft-common-base/src/validation.ts';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { text } from 'craft-common-base/validation';
 
 function digest(value: string): string { return `sha256:${createHash("sha256").update(value).digest("hex")}`; }
 

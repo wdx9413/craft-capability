@@ -9,23 +9,139 @@
       "types": "./dist/capability.d.ts",
       "default": "./dist/capability.js"
     },
-    "./ownership": {
-      "types": "./dist/ownership.d.ts",
-      "default": "./dist/ownership.js"
+    "./basic-analysis": {
+      "types": "./dist/basic-analysis.d.ts",
+      "default": "./dist/basic-analysis.js"
+    },
+    "./capability": {
+      "types": "./dist/capability.d.ts",
+      "default": "./dist/capability.js"
     },
     "./codebase-index": {
       "types": "./dist/codebase-index.d.ts",
       "default": "./dist/codebase-index.js"
     },
-    "./package.json": "./package.json",
     "./context-search": {
       "types": "./dist/context-search.d.ts",
       "default": "./dist/context-search.js"
     },
+    "./control-flow": {
+      "types": "./dist/control-flow.d.ts",
+      "default": "./dist/control-flow.js"
+    },
+    "./data-flow": {
+      "types": "./dist/data-flow.d.ts",
+      "default": "./dist/data-flow.js"
+    },
+    "./definition-query": {
+      "types": "./dist/definition-query.d.ts",
+      "default": "./dist/definition-query.js"
+    },
+    "./graph-budget": {
+      "types": "./dist/graph-budget.d.ts",
+      "default": "./dist/graph-budget.js"
+    },
+    "./java-analysis": {
+      "types": "./dist/java-analysis.d.ts",
+      "default": "./dist/java-analysis.js"
+    },
+    "./java-incremental": {
+      "types": "./dist/java-incremental.d.ts",
+      "default": "./dist/java-incremental.js"
+    },
+    "./lsp-adapter": {
+      "types": "./dist/lsp-adapter.d.ts",
+      "default": "./dist/lsp-adapter.js"
+    },
+    "./lsp-config": {
+      "types": "./dist/lsp-config.d.ts",
+      "default": "./dist/lsp-config.js"
+    },
+    "./lsp-diagnostics-query": {
+      "types": "./dist/lsp-diagnostics-query.d.ts",
+      "default": "./dist/lsp-diagnostics-query.js"
+    },
+    "./lsp-relations": {
+      "types": "./dist/lsp-relations.d.ts",
+      "default": "./dist/lsp-relations.js"
+    },
+    "./lsp-snapshot-files": {
+      "types": "./dist/lsp-snapshot-files.d.ts",
+      "default": "./dist/lsp-snapshot-files.js"
+    },
+    "./lsp-stdio-client": {
+      "types": "./dist/lsp-stdio-client.d.ts",
+      "default": "./dist/lsp-stdio-client.js"
+    },
+    "./lsp-worker": {
+      "types": "./dist/lsp-worker.d.ts",
+      "default": "./dist/lsp-worker.js"
+    },
+    "./multi-language-analysis": {
+      "types": "./dist/multi-language-analysis.d.ts",
+      "default": "./dist/multi-language-analysis.js"
+    },
+    "./ownership": {
+      "types": "./dist/ownership.d.ts",
+      "default": "./dist/ownership.js"
+    },
+    "./project-analysis-cache": {
+      "types": "./dist/project-analysis-cache.d.ts",
+      "default": "./dist/project-analysis-cache.js"
+    },
+    "./project-data-git-exclude": {
+      "types": "./dist/project-data-git-exclude.d.ts",
+      "default": "./dist/project-data-git-exclude.js"
+    },
+    "./project-graph-store": {
+      "types": "./dist/project-graph-store.d.ts",
+      "default": "./dist/project-graph-store.js"
+    },
+    "./python-analysis": {
+      "types": "./dist/python-analysis.d.ts",
+      "default": "./dist/python-analysis.js"
+    },
+    "./python-fallback": {
+      "types": "./dist/python-fallback.d.ts",
+      "default": "./dist/python-fallback.js"
+    },
+    "./python-incremental": {
+      "types": "./dist/python-incremental.d.ts",
+      "default": "./dist/python-incremental.js"
+    },
+    "./repository-files": {
+      "types": "./dist/repository-files.d.ts",
+      "default": "./dist/repository-files.js"
+    },
     "./repository-onboarding": {
       "types": "./dist/repository-onboarding.d.ts",
       "default": "./dist/repository-onboarding.js"
-    }
+    },
+    "./shell-analysis": {
+      "types": "./dist/shell-analysis.d.ts",
+      "default": "./dist/shell-analysis.js"
+    },
+    "./symbol-kind": {
+      "types": "./dist/symbol-kind.d.ts",
+      "default": "./dist/symbol-kind.js"
+    },
+    "./typescript-analysis": {
+      "types": "./dist/typescript-analysis.d.ts",
+      "default": "./dist/typescript-analysis.js"
+    },
+    "./typescript-incremental": {
+      "types": "./dist/typescript-incremental.d.ts",
+      "default": "./dist/typescript-incremental.js"
+    },
+    "./typescript-runtime": {
+      "types": "./dist/typescript-runtime.d.ts",
+      "default": "./dist/typescript-runtime.js"
+    },
+    "./usage-signals": {
+      "types": "./dist/usage-signals.d.ts",
+      "default": "./dist/usage-signals.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -45,5 +161,9 @@
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }

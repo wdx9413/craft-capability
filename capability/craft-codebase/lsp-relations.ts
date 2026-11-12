@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { relative, resolve } from "node:path";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 
 type SymbolRange = { readonly node: JsonObject; readonly start: number; readonly end: number };
 type TextIndex = { offset(raw: JsonObject | undefined): number | undefined };

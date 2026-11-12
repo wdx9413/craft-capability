@@ -1,5 +1,5 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 
 export const KNOWLEDGE_TASK_EFFECT_POLICY = "craft.knowledge-task-effect.v1";
 export const knowledgeTaskEffectId = (run: JsonObject) => `knowledge_task_effect_${stableDigest({ id: run.id, version: run.version }).slice(-48)}`;

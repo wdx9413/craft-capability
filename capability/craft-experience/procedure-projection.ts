@@ -11,13 +11,13 @@ import { validateGraphControl } from "./procedure-graph.ts";
  */
 import { lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest, payload } from '../../common/craft-common-base/src/digest.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { stableDigest, payload } from 'craft-common-base/digest';
 import { ProcedureDefinitionStore, procedureDefinitionRef, type ProcedureDefinition, type ProcedureKind } from "./procedure-definition.ts";
 import { activeProcedure, belongsToRetiredScenario, preserveProcedureRelease, updateProcedureRelease, selectedProcedure } from "./procedure-release.ts";
 import { syncGraphVersionManifest } from "./graph-version-manifest.ts";
 import { ProcedurePlanner, validateProcedureComposition } from "./procedure-composition.ts";
-import { scopeEnvelope } from '../../common/craft-common-base/src/scope-policy.ts';
+import { scopeEnvelope } from 'craft-common-base/scope-policy';
 
 const STAGES = ["shadow", "held_out", "signoff", "canary"] as const;
 type Stage = typeof STAGES[number];

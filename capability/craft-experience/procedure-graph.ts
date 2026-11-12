@@ -1,6 +1,6 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { object, text } from '../../common/craft-common-base/src/validation.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { object, text } from 'craft-common-base/validation';
+import { stableDigest } from 'craft-common-base/digest';
 
 type Record = JsonObject;
 function rows(value: unknown, name: string): Record[] {

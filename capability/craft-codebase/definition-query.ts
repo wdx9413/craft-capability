@@ -1,4 +1,4 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 
 const DEFINITION_EDGE_KINDS = new Set(["definitions", "references", "calls", "imports", "type_definition"]);
 

@@ -1,7 +1,7 @@
 import { existsSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { checkedExperiencePath, experienceGraphDirectory, ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";
 
 import { activeProcedure, updateProcedureRelease } from "./procedure-release.ts";

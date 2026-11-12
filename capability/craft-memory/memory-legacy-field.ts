@@ -1,4 +1,4 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 
 /** A missing field is legacy only when the bounded complete history also lacks it. */
 export function legacyFieldAbsent(store: CraftStore, kind: string, record: JsonObject, field: string): boolean {

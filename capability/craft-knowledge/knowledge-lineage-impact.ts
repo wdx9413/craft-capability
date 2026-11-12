@@ -1,4 +1,4 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { KnowledgeRelationKernel } from "./knowledge-relation.ts";
 
 /**

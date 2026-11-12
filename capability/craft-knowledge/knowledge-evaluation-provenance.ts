@@ -1,5 +1,5 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 import { knowledgeTaskEffectProofVerified } from "./knowledge-task-effect-proof.ts";
 
 export type KnowledgeEvaluationProvenanceStatus =

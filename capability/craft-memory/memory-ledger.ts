@@ -22,12 +22,12 @@
  * they hold.
  */
 import { randomUUID } from "node:crypto";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { boundedActor, noCredentialAssignment, optionalScope, parseScope, sortedUniqueList, text, type ScopeRef } from '../../common/craft-common-base/src/validation.ts';
-import { canonicalJson, digestJson, stableDigest, payload } from '../../common/craft-common-base/src/digest.ts';
-import { contentReference } from '../../common/craft-common-store-local/src/content-store.ts';
-import { scopeAccess, scopeAllows, scopeEnvelope, sourceAllows, type ScopeAccess } from '../../common/craft-common-base/src/scope-policy.ts';
-import { temporalMemorySelect } from '../../common/craft-common-base/src/memory-temporal-policy.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { boundedActor, noCredentialAssignment, optionalScope, parseScope, sortedUniqueList, text, type ScopeRef } from 'craft-common-base/validation';
+import { canonicalJson, digestJson, stableDigest, payload } from 'craft-common-base/digest';
+import { contentReference } from 'craft-common-store-local/content-store';
+import { scopeAccess, scopeAllows, scopeEnvelope, sourceAllows, type ScopeAccess } from 'craft-common-base/scope-policy';
+import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
 import { MemoryFileStore } from "./memory-files.ts";
 

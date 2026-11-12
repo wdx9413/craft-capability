@@ -1,8 +1,8 @@
 import type ts from "typescript";
 import { getTypeScript, getTypeScriptVersion } from "./typescript-runtime.ts";
 import { posix } from "node:path";
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import type { JsonObject } from 'craft-common-store-local/store';
 
 type Source = { path: string; content: string; digest: string; language: string };
 export type TypeScriptFileUnit = JsonObject & {

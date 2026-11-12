@@ -1,5 +1,5 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { scopeAccess, scopeAllows, scopeEnvelope, scopeFromKey, sourceAllows } from '../../common/craft-common-base/src/scope-policy.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { scopeAccess, scopeAllows, scopeEnvelope, scopeFromKey, sourceAllows } from 'craft-common-base/scope-policy';
 
 /** Apply current claim and Source policy before hydrating an exact or listed claim. */
 export function claimReadable(store: CraftStore, claim: JsonObject, args: JsonObject): boolean {

@@ -1,5 +1,5 @@
 import { ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";
-import { observeOperation } from '../../common/craft-common-log/src/index.ts';
+import { observeOperation } from 'craft-common-log/index';
 /**
  * The Experience read side: routeable Procedures are the only Experience material
  * eligible for Context. Workflow and Graph additionally carry their checked JSON
@@ -17,14 +17,14 @@ import { observeOperation } from '../../common/craft-common-log/src/index.ts';
  * reusable procedure. A procedure becomes usable Context only after shadow, held-out,
  * signoff and canary gates make it routeable.
  */
-import type { ContextRequest, ContextContribution, ContextContributionProvider } from '../../common/craft-common-base/src/capability-protocol.ts';
+import type { ContextRequest, ContextContribution, ContextContributionProvider } from 'craft-common-base/capability-protocol';
 import { contextFeedbackWeights } from "./context-feedback-weight.ts";
 import { experienceGatePenalty } from "./gate-signals.ts";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { scopeAllows, scopeEnvelope, type ScopeAccess } from '../../common/craft-common-base/src/scope-policy.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { scopeAllows, scopeEnvelope, type ScopeAccess } from 'craft-common-base/scope-policy';
 import { activeProcedure } from "./procedure-release.ts";
-import { retrievalTerms } from '../../common/craft-common-base/src/retrieval-terms.ts';
-import { contextAssetMatches, contextAssetRef } from '../../common/craft-common-base/src/context-assets.ts';
+import { retrievalTerms } from 'craft-common-base/retrieval-terms';
+import { contextAssetMatches, contextAssetRef } from 'craft-common-base/context-assets';
 
 /** Tokenize a query the same way `ContextResolutionKernel.resolve` does, so matching agrees. */
 function terms(query: string): string[] {

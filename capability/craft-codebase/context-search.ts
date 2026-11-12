@@ -1,6 +1,6 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { Bm25Index } from "../../common/craft-common-base/src/bm25.ts";
-import { retrievalTerms } from '../../common/craft-common-base/src/retrieval-terms.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { Bm25Index } from "craft-common-base/bm25";
+import { retrievalTerms } from 'craft-common-base/retrieval-terms';
 
 const INTENTS: Record<string, string[]> = {
   登录: ["login", "auth", "session"], 用户: ["user", "account"], 权限: ["permission", "access", "policy"],

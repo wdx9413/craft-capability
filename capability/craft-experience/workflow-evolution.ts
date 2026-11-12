@@ -1,8 +1,8 @@
 import { validateGraphControl } from "./procedure-graph.ts";
 import { randomUUID } from "node:crypto";
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
 import { validateProcedureComposition } from "./procedure-composition.ts";
-import { stableDigest, payload } from '../../common/craft-common-base/src/digest.ts';
+import { stableDigest, payload } from 'craft-common-base/digest';
 
 const OUTCOMES = new Set(["passed", "failed", "inconclusive"]);
 const AXES = new Set(["context", "tools", "generation", "orchestration", "memory", "output"]);

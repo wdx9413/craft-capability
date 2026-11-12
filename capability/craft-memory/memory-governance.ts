@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
 import type { MemoryLedgerKernel } from "./memory-ledger.ts";
-import { scopeAccess, scopeAllows, scopeEnvelope } from '../../common/craft-common-base/src/scope-policy.ts';
-import { retrievalTerms } from '../../common/craft-common-base/src/retrieval-terms.ts';
-import { SCOPE_KINDS } from '../../common/craft-common-base/src/validation.ts';
-import { temporalMemorySelect } from '../../common/craft-common-base/src/memory-temporal-policy.ts';
+import { scopeAccess, scopeAllows, scopeEnvelope } from 'craft-common-base/scope-policy';
+import { retrievalTerms } from 'craft-common-base/retrieval-terms';
+import { SCOPE_KINDS } from 'craft-common-base/validation';
+import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
 
 const SECRET = /(?:api[_-]?key|authorization|cookie|password|passwd|secret|token)\s*[:=]\s*[^\s]{6,}/iu;
 /**

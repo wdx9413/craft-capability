@@ -1,3 +1,7 @@
 packages:
   - capability/*
-
+  - ../craft-common/packages/*
+linkWorkspacePackages: true
+autoInstallPeers: false
+allowBuilds:
+  esbuild: true

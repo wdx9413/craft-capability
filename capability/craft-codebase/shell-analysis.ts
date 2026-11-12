@@ -11,8 +11,8 @@
  * emits edges whose endpoints are emitted nodes (the importer rejects dangling
  * edges outright).
  */
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import type { JsonObject } from 'craft-common-store-local/store';
 import type { RepositoryFile } from "./repository-files.ts";
 import { GRAPH_BUDGET } from "./graph-budget.ts";
 

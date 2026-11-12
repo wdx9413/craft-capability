@@ -1,4 +1,4 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 import { GRAPH_BUDGET } from "./graph-budget.ts";
 
 const MAX_NODES = GRAPH_BUDGET.maxNodes;

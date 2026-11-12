@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { text } from '../../common/craft-common-base/src/validation.ts';
-import { scopeEnvelope, scopeFromKey } from '../../common/craft-common-base/src/scope-policy.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { text } from 'craft-common-base/validation';
+import { scopeEnvelope, scopeFromKey } from 'craft-common-base/scope-policy';
 import { claimReadable } from "./claim-access.ts";
 import { knowledgeScenarioCanClassify, updateKnowledgeScenarioClaim, validateKnowledgeScenarioDefinition } from "./scenario-catalog.ts";
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";

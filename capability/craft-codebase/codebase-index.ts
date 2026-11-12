@@ -1,20 +1,20 @@
-import { observeOperation } from '../../common/craft-common-log/src/index.ts';
+import { observeOperation } from 'craft-common-log/index';
 import { CodeSymbolSearchIndex, codeContextCandidates } from "./context-search.ts";
 import { codebaseUsageWeights } from "./usage-signals.ts";
 import { matchDefinitionEdges } from "./definition-query.ts";
 import { buildControlFlowGraph } from "./control-flow.ts";
 import { buildDataFlowGraph } from "./data-flow.ts";
 import { queryCheckpointCallers, queryCheckpointDiagnostics } from "./lsp-diagnostics-query.ts";
-import { contextAssetMatches, contextAssetRef, requiredContextRef } from '../../common/craft-common-base/src/context-assets.ts';
-import { assertContextReadCurrent, type ContextReadRef } from '../../common/craft-common-store-local/src/context-access-guard.ts';
+import { contextAssetMatches, contextAssetRef, requiredContextRef } from 'craft-common-base/context-assets';
+import { assertContextReadCurrent, type ContextReadRef } from 'craft-common-store-local/context-access-guard';
 import { analyzeTypeScript } from "./typescript-analysis.ts";
 import { analyzePythonControlFlow, analyzePythonDataFlow } from "./python-analysis.ts";
 import { analyzeJavaControlFlow } from "./java-analysis.ts";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { digestJson, stableDigest, stableDigestStreaming } from '../../common/craft-common-base/src/digest.ts';
-import { CraftStore, type JsonObject, type SaveEntry } from '../../common/craft-common-store-local/src/store.ts';
+import { digestJson, stableDigest, stableDigestStreaming } from 'craft-common-base/digest';
+import { CraftStore, type JsonObject, type SaveEntry } from 'craft-common-store-local/store';
 import { ProjectGraphStore } from "./project-graph-store.ts";
 
 const ANALYZER = "builtin-regex-static-v1";

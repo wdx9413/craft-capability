@@ -1,7 +1,7 @@
-import { observedKernel } from '../../common/craft-common-log/src/index.ts';
-import type { CraftCapability } from '../../common/craft-common-base/src/capability-protocol.ts';
-import { CORE_KERNELS } from '../../common/craft-common-base/src/capability-protocol.ts';
-import type { CraftStore } from '../../common/craft-common-store-local/src/store.ts';
+import { observedKernel } from 'craft-common-log/index';
+import type { CraftCapability } from 'craft-common-base/capability-protocol';
+import { CORE_KERNELS } from 'craft-common-base/capability-protocol';
+import type { CraftStore } from 'craft-common-store-local/store';
 import { CodebaseIndexKernel } from "./codebase-index.ts";
 import { CODEBASE_OWNS } from "./ownership.ts";
 

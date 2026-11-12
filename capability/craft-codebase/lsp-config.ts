@@ -1,8 +1,8 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, constants } from "node:fs";
 import { accessSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 
 export const CODEBASE_LSP_CONFIG = "codebase-lsp.json";
 export const MAX_LSP_DOCUMENTS = 1_000;

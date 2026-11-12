@@ -9,9 +9,9 @@
  */
 import { randomUUID } from "node:crypto";
 import { activeProcedure } from "./procedure-release.ts";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { payload, stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import { normalizeSteps, resolveInputs, substitute } from '../../common/craft-common-base/src/workflow.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { payload, stableDigest } from 'craft-common-base/digest';
+import { normalizeSteps, resolveInputs, substitute } from 'craft-common-base/workflow';
 import { ProcedureDefinitionStore, procedureDefinitionRef, type ProcedureDefinition } from "./procedure-definition.ts";
 
 type TriggerKind = "manual" | "interval";

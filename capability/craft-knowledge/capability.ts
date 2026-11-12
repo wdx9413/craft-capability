@@ -1,4 +1,4 @@
-import { observedKernel } from '../../common/craft-common-log/src/index.ts';
+import { observedKernel } from 'craft-common-log/index';
 import { KnowledgeClaimGovernance } from "./claim-governance.ts";
 /**
  * The Knowledge capability.
@@ -28,9 +28,9 @@ import { KnowledgeClaimGovernance } from "./claim-governance.ts";
  * projects only reviewed claims; diagnostic searches may expose candidates to a human, but a
  * candidate can never enter an execution Host's Context merely because it was imported.
  */
-import type { CraftCapability } from '../../common/craft-common-base/src/capability-protocol.ts';
-import { CORE_KERNELS } from '../../common/craft-common-base/src/capability-protocol.ts';
-import type { CraftStore } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftCapability } from 'craft-common-base/capability-protocol';
+import { CORE_KERNELS } from 'craft-common-base/capability-protocol';
+import type { CraftStore } from 'craft-common-store-local/store';
 import { KnowledgeBoundLaunchKernel } from "./knowledge-bound-launch.ts";
 import { KnowledgeRelationKernel } from "./knowledge-relation.ts";
 import { KnowledgeSourceRegistry } from "./knowledge-source-registry.ts";

@@ -1,5 +1,5 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 import type { RepositoryFile } from "./repository-files.ts";
 
 type Definition = { id: string; name: string; path: string; indent: number; start: number; end: number; kind: string };

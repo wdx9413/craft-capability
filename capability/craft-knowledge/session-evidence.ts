@@ -1,8 +1,8 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from 'craft-common-base/digest';
 import { codexTaskGoalDigest } from "./codex-task-prose.ts";
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";
-import { scopeFromKey } from '../../common/craft-common-base/src/scope-policy.ts';
+import { scopeFromKey } from 'craft-common-base/scope-policy';
 import { KnowledgeSourceRegistry } from "./knowledge-source-registry.ts";
 
 const HASH = /^sha256:[a-f0-9]{64}$/u;

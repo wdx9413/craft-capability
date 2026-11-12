@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { ensureProjectStorageDirectory, isLegacySafeSessionId, parseSessionStorageScopeId, projectStorageDirectory, sessionStorageScopeId } from '../../common/craft-common-store-local/src/paths.ts';
-import { canonicalJson, digestJson } from '../../common/craft-common-base/src/digest.ts';
-import { temporalMemorySelect } from '../../common/craft-common-base/src/memory-temporal-policy.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { ensureProjectStorageDirectory, isLegacySafeSessionId, parseSessionStorageScopeId, projectStorageDirectory, sessionStorageScopeId } from 'craft-common-store-local/paths';
+import { canonicalJson, digestJson } from 'craft-common-base/digest';
+import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
 
 function legacyDirectSessionDirectory(sessionId: string): string { return join("/tmp", ".craft_data", "memory", sessionId); }

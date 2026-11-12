@@ -1,7 +1,7 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { digestJson } from '../../common/craft-common-base/src/digest.ts';
-import { text } from '../../common/craft-common-base/src/validation.ts';
-import { sessionStorageScopeId } from '../../common/craft-common-store-local/src/paths.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { digestJson } from 'craft-common-base/digest';
+import { text } from 'craft-common-base/validation';
+import { sessionStorageScopeId } from 'craft-common-store-local/paths';
 import type { MemoryGovernanceKernel } from "./memory-governance.ts";
 import { SharedPromotionEvidenceError } from "./memory-ledger.ts";
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";

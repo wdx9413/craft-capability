@@ -1,7 +1,7 @@
 import type ts from "typescript";
 import { getTypeScript } from "./typescript-runtime.ts";
-import { stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import { stableDigest } from 'craft-common-base/digest';
+import type { JsonObject } from 'craft-common-store-local/store';
 import { buildControlFlowGraph } from "./control-flow.ts";
 
 type Span = { readonly start_offset: number; readonly end_offset: number };

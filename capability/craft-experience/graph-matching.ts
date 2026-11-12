@@ -1,6 +1,6 @@
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { retrievalTerms } from '../../common/craft-common-base/src/retrieval-terms.ts';
-import { text } from '../../common/craft-common-base/src/validation.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
+import { retrievalTerms } from 'craft-common-base/retrieval-terms';
+import { text } from 'craft-common-base/validation';
 
 /** Matching suggests a named Entry/Subscenario/Exit; the planner still checks all contracts. */
 export function matchGraphRoutes(definition: JsonObject, query: string, inputKeys: string[] = []): JsonObject {

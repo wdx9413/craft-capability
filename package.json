@@ -4,7 +4,9 @@
   "private": true,
   "description": "Craft capability restructure workspace (proof-of-concept: craft-datasec)",
   "scripts": {
-    "typecheck:datasec": "pnpm --filter @craft/capability-datasec typecheck"
+    "typecheck:datasec": "pnpm --filter @craft/capability-datasec typecheck",
+    "build": "pnpm --filter @craft/capability-knowledge --filter @craft/capability-memory --filter @craft/capability-experience --filter @craft/capability-codebase --filter @craft/capability-datasec --filter @craft/capability-file-dir-desc run build",
+    "typecheck": "pnpm --filter \"./capability/**\" run typecheck"
   },
   "engines": {
     "node": ">=23"
@@ -14,4 +16,3 @@
     "@types/node": "^24.0.0"
   }
 }
-

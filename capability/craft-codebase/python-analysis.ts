@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { JsonObject } from 'craft-common-store-local/store';
 import type { RepositoryFile } from "./repository-files.ts";
 import { pythonFileUnitDigest, type PythonFileUnit } from "./python-incremental.ts";
 import { analyzePythonFallback } from "./python-fallback.ts";

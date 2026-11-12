@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { canonicalJson, stableDigest } from '../../common/craft-common-base/src/digest.ts';
-import { credentialStatus, selectModel, type ModelProviderSpec, type ModelTier } from '../../common/craft-common-base/src/model-compat.ts';
-import { CraftStore, type JsonObject } from '../../common/craft-common-store-local/src/store.ts';
-import { scopeFromKey } from '../../common/craft-common-base/src/scope-policy.ts';
+import { canonicalJson, stableDigest } from 'craft-common-base/digest';
+import { credentialStatus, selectModel, type ModelProviderSpec, type ModelTier } from 'craft-common-base/model-compat';
+import { CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { scopeFromKey } from 'craft-common-base/scope-policy';
 import { knowledgeDirectoryForScope, projectRootForKnowledgeSource } from "./project-knowledge-content.ts";
-import { listKnowledgeScenarios } from "../craft-knowledge/scenario-catalog.ts";
+import { listKnowledgeScenarios } from "@craft/capability-knowledge/scenario-catalog";
 
 const PURPOSES = new Set(["evaluation", "workflow_evolution", "knowledge_scenario_classification"]);
 const KNOWLEDGE_CLASSIFIABLE_STATUSES = new Set(["candidate", "reviewed"]);

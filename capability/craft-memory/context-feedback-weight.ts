@@ -1,4 +1,4 @@
-import type { CraftStore, JsonObject } from '../../common/craft-common-store-local/src/store.ts';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 
 /** Each verified "helpful" signal adds this much weight, capped. */
 const POSITIVE_BONUS = 0.2;
