@@ -133,5 +133,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wdx9413/craft-capability.git"
+  },
+  "homepage": "https://github.com/wdx9413/craft-capability#readme",
+  "bugs": {
+    "url": "https://github.com/wdx9413/craft-capability/issues"
   }
 }

@@ -64,6 +64,7 @@ importers:
       craft-common-store-local:
         specifier: 0.20.4
         version: link:../../../craft-common/packages/craft-common-store-local
+    devDependencies:
       typescript:
         specifier: '>=5.8 <7'
         version: 5.9.3

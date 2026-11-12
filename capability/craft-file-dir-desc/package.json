@@ -1,7 +1,6 @@
 {
   "name": "@craft/capability-file-dir-desc",
   "version": "0.20.4",
-  "private": true,
   "description": "Self-evolving registry that maps directories to human-readable semantic descriptions",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,5 +30,14 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wdx9413/craft-capability.git"
+  },
+  "homepage": "https://github.com/wdx9413/craft-capability#readme",
+  "bugs": {
+    "url": "https://github.com/wdx9413/craft-capability/issues"
+  },
+  "license": "MIT"
 }

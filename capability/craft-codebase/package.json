@@ -152,8 +152,7 @@
   "dependencies": {
     "craft-common-store-local": "0.20.4",
     "craft-common-base": "0.20.4",
-    "craft-common-log": "0.20.4",
-    "typescript": ">=5.8 <7"
+    "craft-common-log": "0.20.4"
   },
   "engines": {
     "node": ">=23"
@@ -165,5 +164,19 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wdx9413/craft-capability.git"
+  },
+  "homepage": "https://github.com/wdx9413/craft-capability#readme",
+  "bugs": {
+    "url": "https://github.com/wdx9413/craft-capability/issues"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.8 <7"
+  },
+  "devDependencies": {
+    "typescript": ">=5.8 <7"
   }
 }

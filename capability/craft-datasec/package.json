@@ -1,7 +1,6 @@
 {
   "name": "@craft/capability-datasec",
   "version": "0.1.6",
-  "private": true,
   "description": "Independent local text redaction hooks for Claude Code and Codex",
   "type": "module",
   "main": "./dist/rules.js",
@@ -39,5 +38,14 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wdx9413/craft-capability.git"
+  },
+  "homepage": "https://github.com/wdx9413/craft-capability#readme",
+  "bugs": {
+    "url": "https://github.com/wdx9413/craft-capability/issues"
+  },
+  "license": "MIT"
 }

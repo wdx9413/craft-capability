@@ -1,0 +1,33 @@
+name: publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+      # craft-common packages must be on the registry before these installs resolve.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r run build
+      # Bottom-up so cross-capability dependencies resolve from the registry.
+      - run: pnpm --dir capability/craft-datasec publish --provenance --access public --no-git-checks
+      - run: pnpm --dir capability/craft-file-dir-desc publish --provenance --access public --no-git-checks
+      - run: pnpm --dir capability/craft-memory publish --provenance --access public --no-git-checks
+      - run: pnpm --dir capability/craft-knowledge publish --provenance --access public --no-git-checks
+      - run: pnpm --dir capability/craft-experience publish --provenance --access public --no-git-checks
+      - run: pnpm --dir capability/craft-codebase publish --provenance --access public --no-git-checks
