@@ -29,6 +29,10 @@
     "./contribution": {
       "types": "./dist/contribution.d.ts",
       "default": "./dist/contribution.js"
+    },
+    "./memory-signals": {
+      "types": "./dist/memory-signals.d.ts",
+      "default": "./dist/memory-signals.js"
     }
   },
   "files": [

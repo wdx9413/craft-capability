@@ -4,6 +4,15 @@
   "private": true,
   "description": "Independent local text redaction hooks for Claude Code and Codex",
   "type": "module",
+  "main": "./dist/rules.js",
+  "types": "./dist/rules.d.ts",
+  "exports": {
+    ".": { "types": "./dist/rules.d.ts", "default": "./dist/rules.js" },
+    "./rules": { "types": "./dist/rules.d.ts", "default": "./dist/rules.js" },
+    "./vault": { "types": "./dist/vault.d.ts", "default": "./dist/vault.js" },
+    "./hook": { "types": "./dist/hook.d.ts", "default": "./dist/hook.js" },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "node --experimental-strip-types build.ts",
     "test": "node --experimental-strip-types --test ../../tests/craft-datasec.test.ts",

@@ -49,6 +49,14 @@
     "./learning-evaluation": {
       "types": "./dist/learning-evaluation.d.ts",
       "default": "./dist/learning-evaluation.js"
+    },
+    "./contribution": {
+      "types": "./dist/contribution.d.ts",
+      "default": "./dist/contribution.js"
+    },
+    "./experience-deduplication": {
+      "types": "./dist/experience-deduplication.d.ts",
+      "default": "./dist/experience-deduplication.js"
     }
   },
   "files": [
