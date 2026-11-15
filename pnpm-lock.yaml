@@ -39,6 +39,9 @@ importers:
 
   capability/craft-experience:
     dependencies:
+      craft-common-ontology:
+        specifier: 0.20.4
+        version: 0.20.4
       '@craft/capability-knowledge':
         specifier: 0.20.4
         version: 0.20.4
@@ -63,6 +66,9 @@ importers:
 
   capability/craft-knowledge:
     dependencies:
+      craft-common-ontology:
+        specifier: 0.20.4
+        version: 0.20.4
       '@craft/capability-memory':
         specifier: 0.20.4
         version: 0.20.4
@@ -78,6 +84,9 @@ importers:
 
   capability/craft-memory:
     dependencies:
+      craft-common-ontology:
+        specifier: 0.20.4
+        version: 0.20.4
       craft-common-base:
         specifier: 0.20.4
         version: 0.20.4

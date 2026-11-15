@@ -2,6 +2,7 @@ import type { JsonObject } from 'craft-common-store-local/store';
 import { digestJson } from 'craft-common-base/digest';
 import { text } from 'craft-common-base/validation';
 import { sessionStorageScopeId } from 'craft-common-store-local/paths';
+import { validateConcept } from 'craft-common-ontology/validation';
 import type { MemoryGovernanceKernel } from "./memory-governance.ts";
 import { SharedPromotionEvidenceError } from "./memory-ledger.ts";
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
@@ -36,6 +37,9 @@ export class MemoryCapture {
     if (/(?:api[_-]?key|authorization|cookie|password|secret|token)["']?\s*[:=]\s*[^\s]+/iu.test(content)) throw new Error("content must not contain sensitive assignments");
     const kind = String(args.kind ?? "preference");
     if (!new Set(["working", "episodic", "preference", "procedural"]).has(kind)) throw new Error("Memory capture kind is unsupported");
+    // Memory records share the ontology's readability contract: one clean
+    // sentence per record, no filler phrases, no 300-character prose dumps.
+    validateConcept(kind, content);
     const scopeKind = text(args.scope_kind ?? (args.session_id ? "session" : "user"), "scope_kind");
     const rawScopeId = text(args.scope_id ?? (scopeKind === "session" ? args.session_id : scopeKind === "global" ? "global" : "local"), "scope_id");
     const sessionHost = scopeKind === "session" && args.session_host !== undefined ? text(args.session_host, "session_host") : undefined;

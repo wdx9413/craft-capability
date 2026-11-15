@@ -62,6 +62,7 @@
   "license": "MIT",
   "types": "./dist/capability.d.ts",
   "dependencies": {
+    "craft-common-ontology": "0.20.4",
     "craft-common-store-local": "0.20.4",
     "craft-common-base": "0.20.4",
     "craft-common-log": "0.20.4"

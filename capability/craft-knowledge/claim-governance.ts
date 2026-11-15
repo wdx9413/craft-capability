@@ -2,11 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { text } from 'craft-common-base/validation';
 import { scopeEnvelope, scopeFromKey } from 'craft-common-base/scope-policy';
+import { validateConcept } from 'craft-common-ontology/validation';
 import { claimReadable } from "./claim-access.ts";
 import { knowledgeScenarioCanClassify, updateKnowledgeScenarioClaim, validateKnowledgeScenarioDefinition } from "./scenario-catalog.ts";
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";
 import { recordKnowledgeSessionEvidence } from "./session-evidence.ts";
 const KNOWLEDGE_KINDS = new Set(["fact", "rule", "decision", "term", "failure_mode"]);
+/** `failure_mode` is accepted for compatibility and validated as a rule. */
+const KNOWLEDGE_CONCEPT_KINDS = new Set(["fact", "rule", "decision", "term"]);
 const KNOWLEDGE_REVIEW_EXIT_STATUSES = new Set(["disputed", "superseded", "expired", "stale"]);
 function id(prefix: string): string { return `${prefix}_${randomUUID().replaceAll("-", "")}`; }
 function valueDigest(value: unknown): string { return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`; }
@@ -65,6 +68,10 @@ export class KnowledgeClaimGovernance {
   knowledgeClaimSave(args: JsonObject): JsonObject {
     const kind = text(args.kind, "kind"); if (!KNOWLEDGE_KINDS.has(kind)) throw new Error("Knowledge claim kind is unsupported");
     const content = assertNoSecret(document(args.content, "content"), "content"); const scope = text(args.scope, "scope");
+    // Every durable claim is a concept record: the shared taxonomy validates the
+    // statement's readability so later readers get one clean sentence, not prose
+    // that only made sense to the writer.
+    const concept = validateConcept(kind === "failure_mode" ? "rule" : kind, content);
     const evidenceIds = uniqueTextArray(args.evidence_ids, "evidence_ids"); evidenceIds.forEach((item) => this.store.get("evidence", item));
     const tags = optionalTextArray(args.tags, "tags"); const validUntil = args.valid_until === undefined ? null : new Date(validIsoTime(args.valid_until, "valid_until")).toISOString();
     const claimId = String(args.claim_id ?? id("knowledge_claim")); const existing = this.store.find("knowledge_claim", claimId);

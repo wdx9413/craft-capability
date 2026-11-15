@@ -3,6 +3,7 @@ import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, re
 import { join } from "node:path";
 import type { JsonObject } from 'craft-common-store-local/store';
 import { stableDigest } from 'craft-common-base/digest';
+import { validateConcept } from 'craft-common-ontology/validation';
 
 const SCHEMA = "craft.experience-scenario-catalog.v1";
 const KEY = /^[a-z0-9][a-z0-9._/-]{0,95}$/u;
@@ -129,6 +130,9 @@ export function validateExperienceScenarioDefinition(value: unknown): ScenarioDe
   for (const field of ["summary", "applies_when", "excludes"] as const) {
     if (typeof item[field] !== "string" || !String(item[field]).trim() || String(item[field]).length > 500 || SECRET.test(String(item[field]))) throw new Error("Experience scenario definition is invalid");
   }
+  // A scenario is a procedure concept: the summary must pass the shared
+  // readability contract so a later reader sees one clean sentence, not prose.
+  validateConcept("procedure", item.summary);
   return { summary: String(item.summary).trim(), applies_when: String(item.applies_when).trim(), excludes: String(item.excludes).trim() };
 }
 
