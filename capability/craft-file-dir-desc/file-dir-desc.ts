@@ -1,9 +1,14 @@
 /**
- * `craft-file-dir-desc`: a self-evolving registry that maps a directory to a
- * human-readable semantic description and back. People navigate machines by
- * meaning ("where the billing service lives") not by absolute paths, so the
- * registry lets an agent resolve a description to a path and a path to its
- * meaning.
+ * A self-evolving registry of *places*: a directory on a named device, plus the
+ * human name people use for it. People navigate by meaning ("where the billing
+ * service lives"), not by absolute paths, so the registry resolves a name to a
+ * place and a place to its names.
+ *
+ * A place is `(device_id, path)`. The same path on two machines is two places;
+ * that is the whole reason the device dimension exists. A place may also carry a
+ * repository identity (remote URL + commit) when the directory is a git
+ * checkout, which lets two devices that hold the same repository agree on one
+ * identity without merging their device-local places.
  *
  * Self-evolution rule (from NEEDREAD.md): a directory is only persisted once it
  * has actually been used, and it is only "promoted" to a stable, recallable
@@ -20,9 +25,14 @@ export const PROMOTION_USE_THRESHOLD = 3;
 
 export interface FileDirDescRecord {
   id: string;
+  /** Stable device identity; `local` only means "the device running this process". */
+  deviceId: string;
+  deviceKind: DeviceKind;
   path: string;
   description: string;
   hostKind: "local" | "cloud";
+  /** Present only when the directory is a git checkout; enables cross-device recall. */
+  repoIdentity: RepoIdentity | null;
   useCount: number;
   status: "observed" | "promoted" | "revoked";
   createdAt: string;
@@ -31,6 +41,52 @@ export interface FileDirDescRecord {
   /** Set when an entry was withdrawn: who, why and when. */
   revokedBy?: string | null;
   revokedReason?: string | null;
+}
+
+export type DeviceKind = "local" | "ssh" | "container" | "remote-workspace" | "cloud";
+
+export interface RepoIdentity {
+  /** Normalized remote URL, without credentials. */
+  remoteUrl: string;
+  /** Commit the place was last observed at, if known. */
+  commit: string | null;
+}
+
+const DEVICE_KINDS = new Set<DeviceKind>(["local", "ssh", "container", "remote-workspace", "cloud"]);
+/** Device ids are user-visible identifiers, not free-form prose. */
+const DEVICE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
+
+function normalizeDeviceId(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "local";
+  if (typeof value !== "string") throw new Error("device_id must be a string");
+  const trimmed = value.trim().toLowerCase();
+  if (!DEVICE_ID.test(trimmed)) throw new Error("device_id must be 1-64 lowercase letters, digits, dot, dash or underscore");
+  return trimmed;
+}
+
+function normalizeDeviceKind(value: unknown): DeviceKind {
+  if (value === undefined || value === null || value === "") return "local";
+  if (typeof value !== "string" || !DEVICE_KINDS.has(value as DeviceKind)) {
+    throw new Error(`device_kind must be one of: ${[...DEVICE_KINDS].join(", ")}`);
+  }
+  return value as DeviceKind;
+}
+
+/** Reject credentials in a remote URL; the registry stores identity, never secrets. */
+function normalizeRepoIdentity(value: unknown): RepoIdentity | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("repo_identity must be an object");
+  const item = value as JsonObject;
+  // A stored record may carry an empty placeholder; treat it as "no repository"
+  // instead of failing to read back an otherwise valid place.
+  if (item.remote_url === undefined || item.remote_url === null || item.remote_url === "") return null;
+  const remoteUrl = String(item.remote_url ?? "").trim();
+  if (!remoteUrl) throw new Error("repo_identity.remote_url must be a non-empty string");
+  if (/\/\/[^/@\s]+:[^/@\s]+@/u.test(remoteUrl)) throw new Error("repo_identity.remote_url must not contain credentials");
+  if (remoteUrl.length > 500) throw new Error("repo_identity.remote_url must be 500 characters or fewer");
+  const commit = item.commit === undefined || item.commit === null ? null : String(item.commit).trim();
+  if (commit !== null && !/^[0-9a-f]{7,64}$/iu.test(commit)) throw new Error("repo_identity.commit must be a hexadecimal object id");
+  return { remoteUrl, commit };
 }
 
 function normalizePath(value: unknown): string {
@@ -63,9 +119,12 @@ function normalizeHostKind(value: unknown): "local" | "cloud" {
 function toRecord(payload: JsonObject): FileDirDescRecord {
   return {
     id: String(payload.id),
+    deviceId: String(payload.device_id ?? "local"),
+    deviceKind: DEVICE_KINDS.has(payload.device_kind as DeviceKind) ? payload.device_kind as DeviceKind : "local",
     path: String(payload.path),
     description: String(payload.description),
     hostKind: payload.host_kind === "cloud" ? "cloud" : "local",
+    repoIdentity: normalizeRepoIdentity(payload.repo_identity ?? null),
     useCount: Number(payload.use_count ?? 0),
     status: payload.status === "promoted" ? "promoted" : payload.status === "revoked" ? "revoked" : "observed",
     createdAt: String(payload.created_at),
@@ -99,20 +158,27 @@ export class FileDirDescRegistry {
    * `observe`, which never rewrites the description.
    */
   record(args: JsonObject): JsonObject {
+    const deviceId = normalizeDeviceId(args.device_id);
+    const deviceKind = normalizeDeviceKind(args.device_kind);
     const path = normalizePath(args.path);
     const description = normalizeDescription(args.description);
     const hostKind = normalizeHostKind(args.host_kind);
+    const repoIdentity = normalizeRepoIdentity(args.repo_identity);
     const forcePromote = args.promote === true;
     const now = new Date().toISOString();
     // A predicate scan is not LIMIT-bound in the store, so use an effectively
-    // unbounded cap: 1_000 would silently create duplicate entries per path.
-    const existing = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER, (item) => item.path === path)[0];
+    // unbounded cap: 1_000 would silently create duplicate entries per place.
+    // The identity of a place is (device, path); two devices may legitimately
+    // hold the same absolute path and must not be merged.
+    const existing = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER,
+      (item) => item.path === path && String(item.device_id ?? "local") === deviceId)[0];
     if (existing) {
       const useCount = Number(existing.use_count ?? 0) + 1;
       // A withdrawn entry stays withdrawn: only an explicit promote revives it.
       const withdrawn = existing.status === "revoked";
       const promoted = !withdrawn && (forcePromote || useCount >= PROMOTION_USE_THRESHOLD);
-      const payload = { ...existing, description, host_kind: hostKind, use_count: useCount,
+      const payload = { ...existing, device_id: deviceId, device_kind: deviceKind, description, host_kind: hostKind,
+        repo_identity: repoPayload(repoIdentity), use_count: useCount,
         status: withdrawn ? "revoked" : promoted ? "promoted" : "observed", updated_at: now, last_used_at: now };
       this.store.save("file_dir_desc", String(existing.id), payload);
       return toRecord(payload) as unknown as JsonObject;
@@ -120,7 +186,8 @@ export class FileDirDescRegistry {
     const id = String(args.id ?? `fdd_${randomUUID()}`);
     const useCount = 1;
     const promoted = forcePromote || useCount >= PROMOTION_USE_THRESHOLD;
-    const payload = { id, path, description, host_kind: hostKind, use_count: useCount,
+    const payload = { id, device_id: deviceId, device_kind: deviceKind, path, description, host_kind: hostKind,
+      repo_identity: repoPayload(repoIdentity), use_count: useCount,
       status: promoted ? "promoted" : "observed", created_at: now, updated_at: now, last_used_at: now };
     this.store.save("file_dir_desc", id, payload);
     return toRecord(payload) as unknown as JsonObject;
@@ -133,15 +200,20 @@ export class FileDirDescRegistry {
    * entry that was withdrawn.
    */
   observe(args: JsonObject): JsonObject {
+    const deviceId = normalizeDeviceId(args.device_id);
+    const deviceKind = normalizeDeviceKind(args.device_kind);
     const path = normalizePath(args.path);
     const hostKind = normalizeHostKind(args.host_kind);
+    const repoIdentity = normalizeRepoIdentity(args.repo_identity);
     const now = new Date().toISOString();
-    const existing = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER, (item) => item.path === path)[0];
+    const existing = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER,
+      (item) => item.path === path && String(item.device_id ?? "local") === deviceId)[0];
     if (existing) {
       const useCount = Number(existing.use_count ?? 0) + 1;
       const withdrawn = existing.status === "revoked";
       const promoted = !withdrawn && useCount >= PROMOTION_USE_THRESHOLD;
-      const payload = { ...existing, host_kind: hostKind, use_count: useCount,
+      const payload = { ...existing, device_id: deviceId, device_kind: deviceKind, host_kind: hostKind,
+        repo_identity: repoPayload(repoIdentity) ?? existing.repo_identity ?? null, use_count: useCount,
         status: withdrawn ? "revoked" : promoted ? "promoted" : "observed", updated_at: now, last_used_at: now };
       this.store.save("file_dir_desc", String(existing.id), payload);
       return toRecord(payload) as unknown as JsonObject;
@@ -152,7 +224,8 @@ export class FileDirDescRegistry {
       ? (path.split(/[\\/]/u).filter(Boolean).pop() ?? path)
       : normalizeDescription(args.description);
     const id = String(args.id ?? `fdd_${randomUUID()}`);
-    const payload = { id, path, description, host_kind: hostKind, use_count: 1, status: "observed",
+    const payload = { id, device_id: deviceId, device_kind: deviceKind, path, description, host_kind: hostKind,
+      repo_identity: repoPayload(repoIdentity), use_count: 1, status: "observed",
       created_at: now, updated_at: now, last_used_at: now };
     this.store.save("file_dir_desc", id, payload);
     return toRecord(payload) as unknown as JsonObject;
@@ -168,8 +241,12 @@ export class FileDirDescRegistry {
     const toPath = normalizePath(args.path);
     const existing = this.store.find("file_dir_desc", id);
     if (!existing) throw new Error(`Unknown file_dir_desc: ${id}`);
+    // Relocation stays on the same device; moving a place to another machine is
+    // a new place, not a rename.
+    const deviceId = normalizeDeviceId(args.device_id ?? existing.device_id);
+    if (deviceId !== String(existing.device_id ?? "local")) throw new Error("relocate cannot move a place to another device; record it on that device instead");
     const conflict = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER,
-      (item) => item.path === toPath && String(item.id) !== id)[0];
+      (item) => item.path === toPath && String(item.device_id ?? "local") === deviceId && String(item.id) !== id)[0];
     if (conflict) throw new Error(`another entry already describes ${toPath}; withdraw it first`);
     const now = new Date().toISOString();
     const payload = { ...existing, path: toPath, relocated_from: String(existing.path), relocated_at: now, updated_at: now };
@@ -208,23 +285,35 @@ export class FileDirDescRegistry {
   }
 
   /**
-   * Bidirectional resolve. With `description`, return ranked matching paths
+   * Bidirectional resolve. With `description`, return ranked matching places
    * (only promoted entries are recallable; observed ones are too noisy). With
-   * `path`, return the description(s) for that path.
+   * `path`, return the names for that path.
+   *
+   * Recall is device-scoped by default: a place on another machine is not
+   * returned unless the caller either asks for that device explicitly or the
+   * record carries a repository identity that matches `repo_identity`. That is
+   * the only case where two devices legitimately describe the same place.
    */
   resolve(args: JsonObject): JsonObject {
     if (args.description !== undefined && args.description !== null) {
       const description = normalizeDescription(args.description);
       const limit = finiteLimit(args.limit);
+      const deviceId = args.device_id === undefined || args.device_id === null ? null : normalizeDeviceId(args.device_id);
+      const repoIdentity = normalizeRepoIdentity(args.repo_identity);
       const matches = this.store
-        .list("file_dir_desc", 1_000, (item) => item.status === "promoted" && termMatch(String(item.description), description))
+        .list("file_dir_desc", 1_000, (item) => item.status === "promoted"
+          && termMatch(String(item.description), description)
+          && (deviceId === null ? true : String(item.device_id ?? "local") === deviceId)
+          && (repoIdentity === null ? true : sameRepo(item.repo_identity, repoIdentity)))
         .map(toRecord)
         .sort((a, b) => b.useCount - a.useCount);
       return { kind: "by_description", query: description, results: matches.slice(0, limit) };
     }
     if (args.path !== undefined && args.path !== null) {
       const path = normalizePath(args.path);
-      const entries = this.store.list("file_dir_desc", 1_000, (item) => item.path === path).map(toRecord);
+      const deviceId = args.device_id === undefined || args.device_id === null ? null : normalizeDeviceId(args.device_id);
+      const entries = this.store.list("file_dir_desc", 1_000, (item) => item.path === path
+        && (deviceId === null ? true : String(item.device_id ?? "local") === deviceId)).map(toRecord);
       return { kind: "by_path", path, results: entries };
     }
     throw new Error("resolve requires description or path");
@@ -233,12 +322,14 @@ export class FileDirDescRegistry {
   list(args: JsonObject = {}): JsonObject {
     const status = args.status === "observed" || args.status === "promoted" || args.status === "revoked" ? args.status : null;
     const hostKind = args.host_kind === "cloud" ? "cloud" : args.host_kind === "local" ? "local" : null;
+    const deviceId = args.device_id === undefined || args.device_id === null ? null : normalizeDeviceId(args.device_id);
     const limit = finiteLimit(args.limit);
     const items = this.store
       // The predicate scan ignores SQL LIMIT, so this bound only guards the
       // in-memory sort; a small cap here would hide entries from `record`.
       .list("file_dir_desc", Number.MAX_SAFE_INTEGER, (item) => (status === null || item.status === status)
-        && (hostKind === null || (hostKind === "cloud" ? item.host_kind === "cloud" : item.host_kind !== "cloud")))
+        && (hostKind === null || (hostKind === "cloud" ? item.host_kind === "cloud" : item.host_kind !== "cloud"))
+        && (deviceId === null || String(item.device_id ?? "local") === deviceId))
       .map(toRecord)
       .sort((a, b) => b.useCount - a.useCount || (a.updatedAt < b.updatedAt ? 1 : -1));
     return { items: items.slice(0, limit) };
@@ -248,6 +339,20 @@ export class FileDirDescRegistry {
 function text(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string`);
   return value.trim();
+}
+
+/** Two places describe the same repository when their normalized remotes agree. */
+function sameRepo(value: unknown, expected: RepoIdentity): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as JsonObject;
+  const remote = String(item.remote_url ?? "").trim().replace(/\.git$/iu, "").replace(/\/+$/u, "");
+  const wanted = expected.remoteUrl.trim().replace(/\.git$/iu, "").replace(/\/+$/u, "");
+  return remote === wanted;
+}
+
+/** Store repo identity in the same snake_case shape the ledger uses everywhere else. */
+function repoPayload(value: RepoIdentity | null): JsonObject | null {
+  return value === null ? null : { remote_url: value.remoteUrl, commit: value.commit };
 }
 
 // Same contract as the Mod registry: an attributed action names its operator,
