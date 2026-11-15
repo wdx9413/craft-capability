@@ -1,7 +1,7 @@
 packages:
   - capability/*
-  - ../craft-common/packages/*
-linkWorkspacePackages: true
+linkWorkspacePackages: false
+excludeLinksFromLockfile: true
 autoInstallPeers: false
 allowBuilds:
   esbuild: true

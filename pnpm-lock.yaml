@@ -2,7 +2,7 @@ lockfileVersion: '9.0'
 
 settings:
   autoInstallPeers: false
-  excludeLinksFromLockfile: false
+  excludeLinksFromLockfile: true
 
 importers:
 
@@ -15,55 +15,17 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
-  ../craft-common/packages/craft-common-base:
-    dependencies:
-      craft-common-store-local:
-        specifier: workspace:*
-        version: link:../craft-common-store-local
-    devDependencies:
-      '@types/node':
-        specifier: '>=23 <26'
-        version: 24.19.2
-      typescript:
-        specifier: '>=5.8 <7'
-        version: 5.9.3
-
-  ../craft-common/packages/craft-common-log:
-    dependencies:
-      craft-common-base:
-        specifier: workspace:*
-        version: link:../craft-common-base
-      craft-common-store-local:
-        specifier: workspace:*
-        version: link:../craft-common-store-local
-    devDependencies:
-      '@types/node':
-        specifier: '>=23 <26'
-        version: 24.19.2
-      typescript:
-        specifier: '>=5.8 <7'
-        version: 5.9.3
-
-  ../craft-common/packages/craft-common-store-local:
-    devDependencies:
-      '@types/node':
-        specifier: '>=23 <26'
-        version: 24.19.2
-      typescript:
-        specifier: '>=5.8 <7'
-        version: 5.9.3
-
   capability/craft-codebase:
     dependencies:
       craft-common-base:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-base
+        version: 0.20.4
       craft-common-log:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-log
+        version: 0.20.4
       craft-common-store-local:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-store-local
+        version: 0.20.4
     devDependencies:
       typescript:
         specifier: '>=5.8 <7'
@@ -79,52 +41,52 @@ importers:
     dependencies:
       '@craft/capability-knowledge':
         specifier: 0.20.4
-        version: link:../craft-knowledge
+        version: 0.20.4
       craft-common-base:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-base
+        version: 0.20.4
       craft-common-log:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-log
+        version: 0.20.4
       craft-common-store-local:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-store-local
+        version: 0.20.4
 
   capability/craft-file-dir-desc:
     dependencies:
       craft-common-base:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-base
+        version: 0.20.4
       craft-common-store-local:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-store-local
+        version: 0.20.4
 
   capability/craft-knowledge:
     dependencies:
       '@craft/capability-memory':
         specifier: 0.20.4
-        version: link:../craft-memory
+        version: 0.20.4
       craft-common-base:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-base
+        version: 0.20.4
       craft-common-log:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-log
+        version: 0.20.4
       craft-common-store-local:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-store-local
+        version: 0.20.4
 
   capability/craft-memory:
     dependencies:
       craft-common-base:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-base
+        version: 0.20.4
       craft-common-log:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-log
+        version: 0.20.4
       craft-common-store-local:
         specifier: 0.20.4
-        version: link:../../../craft-common/packages/craft-common-store-local
+        version: 0.20.4
 
 packages:
 

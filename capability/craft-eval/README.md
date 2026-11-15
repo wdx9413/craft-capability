@@ -1,9 +1,9 @@
 # craft-eval
 
-This capability is a standalone repository at the workspace root: `../craft-eval`.
+This capability is published as the separate npm package `craft-eval`.
 
 It is intentionally NOT a package inside `craft-capability`, because Craft Eval is an
 independent evaluation suite with its own release lifecycle and must not depend on Craft
-core. The evaluation scripts and their dependencies live in `craft-eval/src/`.
+core. Consumers install `craft-eval` by version; they do not read a sibling repository.
 
-See `craft-eval/README.md` for build and test commands.
+See the `craft-eval` package README for build and test commands.
