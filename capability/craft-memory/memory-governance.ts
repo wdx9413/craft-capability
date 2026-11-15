@@ -5,6 +5,7 @@ import { scopeAccess, scopeAllows, scopeEnvelope } from 'craft-common-base/scope
 import { retrievalTerms } from 'craft-common-base/retrieval-terms';
 import { SCOPE_KINDS } from 'craft-common-base/validation';
 import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
+import { validateConcept } from 'craft-common-ontology/validation';
 
 const SECRET = /(?:api[_-]?key|authorization|cookie|password|passwd|secret|token)\s*[:=]\s*[^\s]{6,}/iu;
 /**
@@ -77,6 +78,10 @@ export class MemoryGovernanceKernel {
     const kind = text(args.kind, "kind"); if (!KINDS.has(kind)) throw new Error("memory kind is unsupported");
     const scopeKind = text(args.scope_kind, "scope_kind"); if (!SCOPE_KINDS.has(scopeKind)) throw new Error("scope_kind is unsupported");
     const scopeId = text(args.scope_id, "scope_id"); const scope = { kind: scopeKind, id: scopeId }; const envelope = scopeEnvelope(args.scope_envelope, scope); const content = noSecret(text(args.content, "content"), "content");
+    // The proposal path is the main way a memory is written, so it must enforce
+    // the same readability contract as direct capture. Without this, a caller
+    // could store prose that later readers cannot use.
+    validateConcept(kind, content);
     if (scopeKind === "session") {
       this.ledger.files.pathFor(scope);
       if (this.ledger.files.isSessionArchived(scopeId)) throw new Error("Archived session Memory cannot be proposed");

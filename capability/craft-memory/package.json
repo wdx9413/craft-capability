@@ -25,6 +25,10 @@
       "types": "./dist/memory-capture.d.ts",
       "default": "./dist/memory-capture.js"
     },
+    "./memory-consolidation": {
+      "types": "./dist/memory-consolidation.d.ts",
+      "default": "./dist/memory-consolidation.js"
+    },
     "./memory-files": {
       "types": "./dist/memory-files.d.ts",
       "default": "./dist/memory-files.js"
