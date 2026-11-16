@@ -140,6 +140,9 @@ export class MemoryContribution implements ContextContributionProvider {
         * feedbackWeights.get(String(memory.id))!.penalty * freshness;
       return { memory, item: { memory_id: memory.id, memory_version: memory.version, source_id: memory.source_id, content_digest: memory.content_digest,
         sensitivity: memory.sensitivity, status: memory.status, scope: memory.scope, scope_envelope: scopeEnvelopeReceipt(scopeEnvelope(memory.scope_envelope, memory.scope as { kind: string; id: string })),
+        // Non-identity concept tag from the shared taxonomy, so the context
+        // receipt can state what kind of statement this memory carries.
+        ...(typeof memory.concept_kind === "string" ? { concept_kind: memory.concept_kind } : {}),
         ranking_weight: weight, confirmed_at: confirmedAt, execution_context: !historical, ...(staleAdvisory ? { advisory: true, freshness_score: freshness } : {}) } satisfies JsonObject };
     });
     const required = ({ item }: { item: JsonObject }) => requestedIds.includes(String(item.memory_id)) || requiredRefs.some(ref => contextAssetMatches(ref, contextAssetRef("memory", item, item.scope as JsonObject)));

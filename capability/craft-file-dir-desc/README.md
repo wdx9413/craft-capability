@@ -39,6 +39,26 @@ registry.resolve({ description: "billing service",
 `local`, `ssh`, `container`, `remote-workspace`, `cloud`. Container and CI identities
 are unstable by nature; record them only when the mount and device name are stable.
 
+## Device metadata
+
+A device is a first-class record, not just a string on a place. Register it before
+recording its places so recall can respect device status and health:
+
+```ts
+registry.registerDevice({ id: "build-01", name: "CI builder", device_kind: "ssh",
+  host_kind: "cloud", location: "eu-west", tags: ["ci", "build"], health: "healthy" });
+registry.reportDeviceHealth("build-01", "healthy");
+registry.disableDevice("build-01"); // its places stop being recallable, audit trail survives
+registry.enableDevice("build-01");
+registry.listDevices({ status: "active" });
+```
+
+Places carry non-identity `concept_kind` and `rationale` metadata from the shared
+taxonomy, so context assembly can explain why a directory matters. `canonicalizePath`
+exposes the same path normalization the registry uses, so callers can compare paths
+without splitting one directory into two places. Disabled devices cannot gain new
+places and are excluded from recall; re-enabling is deliberate.
+
 ## License
 
 MIT

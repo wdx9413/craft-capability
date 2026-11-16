@@ -125,7 +125,9 @@ export class ProcedureStore {
       } });
     const next = { ...identity, proposal_id: proposal.id, proposal_version: proposal.version, lifecycle: "candidate", completed_gates: [],
       content_ref: ref, content_digest: ref.digest, definition_ref: definitionRef, definition_digest: definitionRef?.digest ?? null,
-      identity_digest: identityDigest, routeable: false, publication_allowed: false };
+      // Concept tag is non-identity metadata: the taxonomy already validated the
+      // title as a procedure, so downstream context/relations can see it.
+      concept_kind: "procedure", identity_digest: identityDigest, routeable: false, publication_allowed: false };
     if (existing?.routeable === true) preserveProcedureRelease(this.store, existing);
     const procedure = existing ? this.store.save("experience_procedure", id, next) : this.store.create("experience_procedure", id, next);
     return { procedure, idempotent: false };

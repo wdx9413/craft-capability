@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { text } from 'craft-common-base/validation';
 import { scopeEnvelope, scopeFromKey } from 'craft-common-base/scope-policy';
-import { validateConcept } from 'craft-common-ontology/validation';
+import { mapLegacyKind, validateConcept } from 'craft-common-ontology/validation';
 import { claimReadable } from "./claim-access.ts";
 import { knowledgeScenarioCanClassify, updateKnowledgeScenarioClaim, validateKnowledgeScenarioDefinition } from "./scenario-catalog.ts";
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";
@@ -71,7 +71,9 @@ export class KnowledgeClaimGovernance {
     // Every durable claim is a concept record: the shared taxonomy validates the
     // statement's readability so later readers get one clean sentence, not prose
     // that only made sense to the writer.
-    const concept = validateConcept(kind === "failure_mode" ? "rule" : kind, content);
+    // `failure_mode` is a historical name for a rule about how things break.
+    // The shared mapping table owns that translation so every component agrees.
+    const concept = validateConcept(mapLegacyKind("knowledge", kind), content);
     const evidenceIds = uniqueTextArray(args.evidence_ids, "evidence_ids"); evidenceIds.forEach((item) => this.store.get("evidence", item));
     const tags = optionalTextArray(args.tags, "tags"); const validUntil = args.valid_until === undefined ? null : new Date(validIsoTime(args.valid_until, "valid_until")).toISOString();
     const claimId = String(args.claim_id ?? id("knowledge_claim")); const existing = this.store.find("knowledge_claim", claimId);
@@ -156,7 +158,9 @@ export class KnowledgeClaimGovernance {
       ...(typeof args.project_root === "string" ? { project_root: args.project_root } : {}) });
     const claim = this.store.create("knowledge_claim", claimId, { ...identity, ...(scenarioKey ? { scenario_key: scenarioKey } : {}),
       ...(coarseScenarioKey ? { coarse_scenario_key: coarseScenarioKey } : {}), content_ref: contentRef, identity_digest: valueDigest(identity),
-      status: "candidate", review: null, ...(proposedBy === null ? {} : { proposed_by: proposedBy }) });
+      // Concept tag is non-identity metadata: it never changes the claim's digest,
+      // so the shared taxonomy can be extended without invalidating old records.
+      concept_kind: concept.kind, status: "candidate", review: null, ...(proposedBy === null ? {} : { proposed_by: proposedBy }) });
     const scenarioCatalog = updateKnowledgeScenarioClaim(knowledgeDir, { ...claim,
       ...(scenarioDefinition ? { scenario_definition: scenarioDefinition } : {}), ...(coarseScenarioDefinition ? { coarse_scenario_definition: coarseScenarioDefinition } : {}) });
     return { claim, idempotent: false, ...(scenarioCatalog ? { scenario_catalog: scenarioCatalog } : {}) };

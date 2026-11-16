@@ -5,7 +5,7 @@ import { scopeAccess, scopeAllows, scopeEnvelope } from 'craft-common-base/scope
 import { retrievalTerms } from 'craft-common-base/retrieval-terms';
 import { SCOPE_KINDS } from 'craft-common-base/validation';
 import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
-import { validateConcept } from 'craft-common-ontology/validation';
+import { mapLegacyKind, validateConcept } from 'craft-common-ontology/validation';
 
 const SECRET = /(?:api[_-]?key|authorization|cookie|password|passwd|secret|token)\s*[:=]\s*[^\s]{6,}/iu;
 /**
@@ -81,7 +81,10 @@ export class MemoryGovernanceKernel {
     // The proposal path is the main way a memory is written, so it must enforce
     // the same readability contract as direct capture. Without this, a caller
     // could store prose that later readers cannot use.
-    validateConcept(kind, content);
+    // The proposal path enforces the same readability contract as direct
+    // capture; Memory tier names map onto the shared concept taxonomy the same
+    // way the capture path does.
+    const concept = validateConcept(mapLegacyKind("memory", kind), content);
     if (scopeKind === "session") {
       this.ledger.files.pathFor(scope);
       if (this.ledger.files.isSessionArchived(scopeId)) throw new Error("Archived session Memory cannot be proposed");
@@ -116,7 +119,7 @@ export class MemoryGovernanceKernel {
     const conflicts = topic ? this.store.listScoped("memory_candidate", [scope], 10_000, (item) => Boolean(!["rejected", "superseded", "expired"].includes(String(item.status)) && (!item.valid_until || Date.parse(String(item.valid_until)) >= nowMillis) && item.scope && JSON.stringify(item.scope) === JSON.stringify(identity.scope) && item.topic === topic && item.content_digest !== identity.content_digest)) : [];
     const conflictingMemories = topic ? this.store.listScoped("memory_ledger", [scope], 10_000, (item) => Boolean(item.status === "active" && (!item.valid_until || Date.parse(String(item.valid_until)) >= nowMillis) && item.topic === topic && item.scope && JSON.stringify(item.scope) === JSON.stringify(identity.scope) && item.content_digest !== identity.content_digest)) : [];
     const status = conflicts.length || conflictingMemories.length ? "conflict_pending" : "candidate";
-    const candidate = this.store.create("memory_candidate", candidateId, { ...identity, content, status, conflict_ids: conflicts.map((x) => x.id), conflicting_memory_ids: conflictingMemories.map((x) => x.id), proposed_by: proposer(args.proposed_by, "agent"), identity_digest: digest(identity) });
+    const candidate = this.store.create("memory_candidate", candidateId, { ...identity, content, status, conflict_ids: conflicts.map((x) => x.id), conflicting_memory_ids: conflictingMemories.map((x) => x.id), proposed_by: proposer(args.proposed_by, "agent"), concept_kind: concept.kind, identity_digest: digest(identity) });
     for (const conflict of conflicts) this.store.save("memory_candidate", String(conflict.id), { ...payload(conflict), status: "conflict_pending", conflict_ids: [...new Set([...(conflict.conflict_ids as string[] ?? []), candidate.id])] });
     const eligible = args.proposal_only !== true && policy.mode === "governed" && conflicts.length === 0 && conflictingMemories.length === 0 && ids.length > 0 && ids.every((e) => {
       const confidenceValue = String(this.store.get("evidence", e).confidence);

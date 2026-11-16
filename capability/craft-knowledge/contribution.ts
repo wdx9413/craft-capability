@@ -267,6 +267,9 @@ export class KnowledgeContribution implements ContextContributionProvider {
         content_digest: match.claim.content_digest,
         evidence_ids: match.claim.evidence_ids,
         source_id: match.claim.source_id,
+        // The shared concept tag travels with the hit so context assembly can
+        // explain *why* a record was selected, not just that it matched.
+        ...(typeof match.claim.concept_kind === "string" ? { concept_kind: match.claim.concept_kind } : {}),
         reason: match.claim.status === "reviewed" ? "reviewed_bm25"
           : freshnessOf(match.claim) === null ? "candidate_diagnostic_only" : "stale_advisory",
         ranking_weight: weightOf(match.claim),

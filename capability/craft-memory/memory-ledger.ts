@@ -28,6 +28,7 @@ import { canonicalJson, digestJson, stableDigest, payload } from 'craft-common-b
 import { contentReference } from 'craft-common-store-local/content-store';
 import { scopeAccess, scopeAllows, scopeEnvelope, sourceAllows, type ScopeAccess } from 'craft-common-base/scope-policy';
 import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
+import { mapLegacyKind } from 'craft-common-ontology/validation';
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
 import { MemoryFileStore } from "./memory-files.ts";
 
@@ -235,7 +236,11 @@ export class MemoryLedgerKernel {
     // the Ledger indexes memory rather than holding it, and a rewritten body is a drift error.
     const contentRef = this.store.contentStore.writeSync({ kind: "memory", record_id: memoryId, version: 1, scope: `${memoryScope.kind}:${memoryScope.id}`, status: "active", sensitivity, source_id: String(source.id), body: content,
       ...(typeof args.project_root === "string" ? { project_root: args.project_root } : {}) });
-    const memory = this.store.create("memory_ledger", memoryId, { ...identity, content_ref: contentRef, identity_digest: identityDigest, status: "active", supersedes_id: null, contradiction_ids: [], derived_from_ids: supportRefs.map(ref => ref.id), ...(workingNote ? {} : { working_legacy_compatibility: kind === "working" }) });
+    // Concept tag is non-identity metadata: it lets the context plane and the
+    // typed relation graph read a memory's concept without rewriting its digest.
+    const conceptKind = args.concept_kind === undefined || args.concept_kind === null
+      ? mapLegacyKind("memory", kind) : args.concept_kind;
+    const memory = this.store.create("memory_ledger", memoryId, { ...identity, content_ref: contentRef, identity_digest: identityDigest, status: "active", supersedes_id: null, contradiction_ids: [], derived_from_ids: supportRefs.map(ref => ref.id), concept_kind: conceptKind, ...(workingNote ? {} : { working_legacy_compatibility: kind === "working" }) });
     return { memory, projection: this.files.sync(memoryScope), idempotent: false };
   }
 

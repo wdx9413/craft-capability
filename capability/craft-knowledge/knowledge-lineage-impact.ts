@@ -1,5 +1,6 @@
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { KnowledgeRelationKernel } from "./knowledge-relation.ts";
+import { checkRelationConcepts } from 'craft-common-ontology/validation';
 
 /**
  * Derived-claim impact analysis over the typed knowledge graph.
@@ -37,6 +38,15 @@ export interface LineageImpactNode {
   /** Stored relation confidence, carried through without interpretation. */
   relation_confidence: string | null;
   needs_reevaluation: boolean;
+  /** Shared taxonomy concept of this node, when tagged; null for historical records. */
+  concept_kind: string | null;
+}
+
+/** A typed relation whose endpoint concepts fall outside the shared constraint. */
+export interface LineageTypeIssue {
+  relation_id: string;
+  relation: string;
+  reason: string;
 }
 
 export interface LineageImpact {
@@ -48,6 +58,8 @@ export interface LineageImpact {
   truncated: boolean;
   /** True when at least one derived claim must be re-evaluated. */
   needs_reevaluation: boolean;
+  /** Diagnostic only: typed relations whose endpoint concepts are incompatible. */
+  type_issues: LineageTypeIssue[];
 }
 
 /** Multiply one hop's confidence factor; unverified support degrades fastest. */
@@ -79,6 +91,20 @@ function cleanNode(node: JsonObject): JsonObject {
   return clean;
 }
 
+/** Read the non-identity concept tag of a node record, if the record still exists. */
+function conceptOf(store: CraftStore, node: JsonObject): string | null {
+  if (typeof node.kind !== "string" || typeof node.id !== "string") return null;
+  try {
+    const record = node.version === undefined || node.version === null
+      ? store.get(node.kind, node.id) : store.get(node.kind, node.id, Number(node.version));
+    return typeof record.concept_kind === "string" ? record.concept_kind : null;
+  } catch {
+    // Endpoint kinds may be documents/chunks/evidence that have no concept tag;
+    // a missing record must not fail a read-only lineage report.
+    return null;
+  }
+}
+
 export class KnowledgeLineageImpactKernel {
   readonly store: CraftStore;
   private readonly relations: KnowledgeRelationKernel;
@@ -100,6 +126,15 @@ export class KnowledgeLineageImpactKernel {
       ? Math.min(Number(args.max_nodes), MAX_NODES) : MAX_NODES;
     const all = (this.relations.neighbors({ node: root, as_of: asOf, limit: 1000 }) as JsonObject).relations as JsonObject[];
 
+    const typeIssues: LineageTypeIssue[] = [];
+    for (const edge of all) {
+      const check = checkRelationConcepts(edge.relation,
+        conceptOf(this.store, edge.source as JsonObject), conceptOf(this.store, edge.target as JsonObject));
+      if (!check.valid && check.reason) {
+        typeIssues.push({ relation_id: String(edge.relation_id), relation: String(edge.relation), reason: check.reason });
+      }
+    }
+
     const challengeIds: string[] = [];
     for (const edge of all) {
       if (edge.relation !== "contradicts" && edge.relation !== "supersedes") continue;
@@ -110,7 +145,7 @@ export class KnowledgeLineageImpactKernel {
 
     const impacted: LineageImpactNode[] = [];
     const visited = new Set<string>([nodeKey(root)]);
-    let frontier: LineageImpactNode[] = [{ node: root, depth: 0, confidence_factor: 1, via_relation_id: null, relation_confidence: null, needs_reevaluation: false }];
+    let frontier: LineageImpactNode[] = [{ node: root, depth: 0, confidence_factor: 1, via_relation_id: null, relation_confidence: null, needs_reevaluation: false, concept_kind: conceptOf(this.store, root) }];
     let truncated = false;
     for (let depth = 1; depth <= MAX_DEPTH && frontier.length; depth += 1) {
       const next: LineageImpactNode[] = [];
@@ -134,6 +169,7 @@ export class KnowledgeLineageImpactKernel {
             via_relation_id: String(edge.relation_id),
             relation_confidence: String(edge.confidence ?? "unverified"),
             needs_reevaluation: rootChallenged,
+            concept_kind: conceptOf(this.store, derived),
           };
           impacted.push(entry);
           next.push(entry);
@@ -144,7 +180,7 @@ export class KnowledgeLineageImpactKernel {
       frontier = next;
     }
     return { root, root_challenged: rootChallenged, challenge_relation_ids: challengeIds,
-      impacted, truncated, needs_reevaluation: rootChallenged && impacted.length > 0 };
+      impacted, truncated, needs_reevaluation: rootChallenged && impacted.length > 0, type_issues: typeIssues };
   }
 }
 
