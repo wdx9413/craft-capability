@@ -32,6 +32,7 @@ import type { CraftCapability } from 'craft-common-base/capability-protocol';
 import { CORE_KERNELS } from 'craft-common-base/capability-protocol';
 import type { CraftStore } from 'craft-common-store-local/store';
 import { KnowledgeBoundLaunchKernel } from "./knowledge-bound-launch.ts";
+import { KnowledgeAutoReviewKernel } from "./knowledge-auto-review.ts";
 import { KnowledgeRelationKernel } from "./knowledge-relation.ts";
 import { KnowledgeSourceRegistry } from "./knowledge-source-registry.ts";
 import { KnowledgeWorkbenchKernel } from "./knowledge-workbench.ts";
@@ -51,6 +52,7 @@ import { KnowledgeContribution } from "./contribution.ts";
 export const KNOWLEDGE_KERNELS = {
   sources: "knowledge.sources",
   claims: "knowledge.claims",
+  autoReview: "knowledge.auto_review",
   boundLaunch: "knowledge.bound_launch",
   workbench: "knowledge.workbench",
   relations: "knowledge.relations",
@@ -86,6 +88,10 @@ export const knowledgeCapability: CraftCapability = {
     // Memory Ledger. Its tools become the capability's to claim rather than the core's to
     // project on its behalf, which is the whole point of cutting the class along the member.
     registry.provide(KNOWLEDGE_KERNELS.claims, observedKernel(store, "knowledge", new KnowledgeClaimGovernance(store)));
+    // Promotion policy, semantic review packets and host review are claim
+    // governance operations, so the kernel belongs in this package rather than
+    // in the core facade.
+    registry.provide(KNOWLEDGE_KERNELS.autoReview, observedKernel(store, "knowledge", new KnowledgeAutoReviewKernel(store)));
     registry.provide(KNOWLEDGE_KERNELS.sources, observedKernel(store, "knowledge", new KnowledgeSourceRegistry(store)));
     registry.provide(KNOWLEDGE_KERNELS.workbench, observedKernel(store, "knowledge", new KnowledgeWorkbenchKernel(store)));
     registry.provide(KNOWLEDGE_KERNELS.boundLaunch, observedKernel(store, "knowledge", new KnowledgeBoundLaunchKernel(store)));

@@ -18,6 +18,7 @@ import { activeProcedure, belongsToRetiredScenario, preserveProcedureRelease, up
 import { syncGraphVersionManifest } from "./graph-version-manifest.ts";
 import { ProcedurePlanner, validateProcedureComposition } from "./procedure-composition.ts";
 import { scopeEnvelope } from 'craft-common-base/scope-policy';
+import { validateConcept } from 'craft-common-ontology/validation';
 
 const STAGES = ["shadow", "held_out", "signoff", "canary"] as const;
 type Stage = typeof STAGES[number];
@@ -87,6 +88,10 @@ export class ProcedureStore {
       evidence_ids: strings(args.evidence_ids ?? (request.observation_refs as JsonObject[]).flatMap((item) => item.evidence_ids as string[]), "evidence_ids", 1),
       title: text(args.title ?? proposal.name, "title"), description: text(args.description ?? proposal.description, "description"),
     };
+    // A Procedure is the taxonomy's `procedure` concept: its human-readable
+    // name must pass the same readability contract as every other durable
+    // record, or later readers get titles that only made sense to the writer.
+    validateConcept("procedure", identity.title);
     const id = String(args.procedure_id ?? `experience_procedure_${stableDigest(identity).slice(-20)}`);
     const existing = this.store.find("experience_procedure", id);
     const identityDigest = stableDigest(identity);

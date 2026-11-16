@@ -57,6 +57,10 @@
       "types": "./dist/knowledge-workbench.d.ts",
       "default": "./dist/knowledge-workbench.js"
     },
+    "./knowledge-auto-review": {
+      "types": "./dist/knowledge-auto-review.d.ts",
+      "default": "./dist/knowledge-auto-review.js"
+    },
     "./local-candidate-import": {
       "types": "./dist/local-candidate-import.d.ts",
       "default": "./dist/local-candidate-import.js"
