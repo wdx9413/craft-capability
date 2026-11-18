@@ -22,6 +22,7 @@
 import { isAbsolute, resolve, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { type CraftStore, type JsonObject } from 'craft-common-store-local/store';
+import { CraftNotesRegistry, type CraftNoteTextValidator } from "./notes.ts";
 
 /** Below this count a directory is only "observed"; at/above it becomes "promoted". */
 export const PROMOTION_USE_THRESHOLD = 3;
@@ -53,6 +54,7 @@ export interface RegisterDeviceArgs {
   status?: "active" | "disabled";
   concept_kind?: "fact" | "rule" | "term";
   body?: string;
+  device_note: string;
 }
 
 export interface FileDirDescRecord {
@@ -225,31 +227,22 @@ function deviceActive(store: CraftStore, deviceId: string): boolean {
 
 export class FileDirDescRegistry {
   readonly store: CraftStore;
-  constructor(store: CraftStore) { this.store = store; }
+  readonly notes: CraftNotesRegistry;
+  constructor(store: CraftStore, validateNoteText?: CraftNoteTextValidator) {
+    this.store = store;
+    this.notes = new CraftNotesRegistry(store, validateNoteText);
+  }
 
   /** Register or update device metadata. Disabled devices stop being recallable. */
   registerDevice(args: RegisterDeviceArgs): DeviceRecord {
     const id = String(args.id ?? `device_${randomUUID()}`);
     const existing = this.store.find("device", id);
-    const now = new Date().toISOString();
-    const deviceKind = normalizeDeviceKind(args.device_kind ?? (existing ? existing.device_kind : "local"));
-    const hostKind = normalizeHostKind(args.host_kind ?? (existing ? existing.host_kind : (deviceKind === "cloud" ? "cloud" : "local")));
-    const tags = normalizeTags(args.tags);
-    const health = normalizeHealth(args.health);
-    const status = normalizeDeviceStatus(args.status ?? (existing ? existing.status : "active"));
-    if (existing) {
-      if (existing.status === "disabled" && status === "active") throw new Error("a disabled device cannot be reactivated through registration; un-disable it first");
-      const payload = { ...existing, name: args.name === undefined ? existing.name : args.name, device_kind: deviceKind, host_kind: hostKind,
-        location: args.location === undefined ? existing.location : args.location, tags,
-        health: args.health === undefined ? existing.health : health, status,
-        last_seen_at: args.status === "active" ? now : existing.last_seen_at, updated_at: now };
-      this.store.save("device", id, payload);
-      return toDeviceRecord(payload);
+    if (existing?.status === "disabled" && args.status === "active" && !args.device_note?.trim()) {
+      throw new Error("device reactivated requires a Device Note");
     }
-    const payload = { id, name: args.name ?? null, device_kind: deviceKind, host_kind: hostKind,
-      location: args.location ?? null, tags, health, last_seen_at: now, created_at: now, updated_at: now, status };
-    this.store.save("device", id, payload);
-    return toDeviceRecord(payload);
+    if (typeof args.device_note !== "string" || !args.device_note.trim()) throw new Error("device_note is required");
+    this.notes.createDevice({ ...args, id, note: args.device_note });
+    return toDeviceRecord(this.store.find("device", id)!);
   }
 
   /** Read one device's metadata. */
@@ -263,6 +256,11 @@ export class FileDirDescRegistry {
   setDeviceStatus(id: string, status: "active" | "disabled"): DeviceRecord {
     const existing = this.store.find("device", id);
     if (!existing) throw new Error(`Unknown device: ${id}`);
+    if (existing.status === "disabled" && status === "active") {
+      const note = this.store.list("craft_note", Number.MAX_SAFE_INTEGER,
+        (item) => item.subject_type === "device" && item.subject_key === id && item.status === "confirmed")[0];
+      if (!note?.text) throw new Error("device cannot be reactivated without a confirmed Device Note");
+    }
     const now = new Date().toISOString();
     const payload = { ...existing, status, updated_at: now,
       ...(status === "disabled" ? { health: "offline", last_seen_at: existing.last_seen_at } : { health: "healthy", last_seen_at: now }) };

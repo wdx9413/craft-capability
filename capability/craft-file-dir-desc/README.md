@@ -1,63 +1,45 @@
-# @craft/capability-file-dir-desc
+# Craft Notes
 
-A self-evolving registry of **places**: a directory on a named device, plus the human
-name people use for it.
+`@craft/capability-file-dir-desc` remains the package identifier for compatibility. The unified public capability is **Craft Notes** and stores typed Device, Directory and File notes in the existing Craft Store.
 
-A place is `(device_id, path)`. The same absolute path on two machines is two places —
-that is why the device dimension exists. A place may carry a repository identity
-(remote URL + commit) when the directory is a git checkout; that identity is the only
-thing that lets two devices recall the same checkout.
+## Rules
 
-Part of the [Craft](https://github.com/wdx9413/craft) agent work runtime. This package is consumed by the Craft core and can also be used standalone.
+- A device can be registered only with a user supplied Device Note. A disabled device can be re-enabled only after it has a confirmed Device Note.
+- Directory and File Notes begin as candidates. Three distinct completed tasks across at least two Host sessions in a rolling 30-day window qualify a candidate; an explicit pin can also create one. Neither path confirms it automatically.
+- File references are caller supplied. The capability never opens or reads a file. Optional size and modification time are review hints; missing remote metadata is recorded as `path_only`.
+- Only confirmed Notes and migrated promoted legacy entries enter default retrieval. Revoked Notes stay out of retrieval.
+- Credential-like note text is rejected. Notes are scoped by device, project and exact path.
 
-## Usage
+## Example
 
 ```ts
-import { FileDirDescRegistry } from "@craft/capability-file-dir-desc";
-import { CraftStore } from "craft-common-store-local";
+import { CraftNotesRegistry } from "@craft/capability-file-dir-desc";
 
-const store = await new CraftStore(craftPaths()).open();
-const registry = new FileDirDescRegistry(store);
+const notes = new CraftNotesRegistry(store);
+notes.createDevice({ id: "laptop", note: "主力开发机，运行本地模型" });
 
-// Record a place on a specific device
-registry.record({
-  device_id: "build-01", device_kind: "ssh",
-  path: "/srv/billing", description: "billing service monorepo",
-  repo_identity: { remote_url: "https://github.com/acme/billing.git" },
+const candidate = notes.observeDirectory({
+  path: "/work/billing",
+  device_id: "laptop",
+  project_id: "project:billing",
+  task_id: "task-42",
+  session_id: "codex-session-9",
+  outcome: "completed",
 });
-
-// Resolve a description back to places (device-scoped by default)
-const result = registry.resolve({ description: "billing service" });
-
-// Cross-device recall only through a repository identity
-registry.resolve({ description: "billing service",
-  repo_identity: { remote_url: "https://github.com/acme/billing.git" } });
+// A human must confirm the exact candidate before it is recalled by default.
 ```
+
+The previous `FileDirDescRegistry` and `craft_file_dir_desc_*` names remain compatibility surfaces. New integrations should use `CraftNotesRegistry` and `craft_notes_*` operations.
+
+## Compatibility API
+
+`FileDirDescRegistry` and the existing `craft_file_dir_desc_*` operations remain available for legacy place records. Device registration through this API also requires a user-authored `device_note`; re-enabling a disabled device requires a confirmed Device Note. Existing device kind, host kind, location, tags and health metadata remain supported.
+
+Legacy directory records retain their `concept_kind` and `rationale` fields, repository identity, use count and revocation audit. New integrations that manage Device, Directory and File Notes should use `CraftNotesRegistry`; the older registry remains for compatibility with existing place records.
 
 ## Device kinds
 
-`local`, `ssh`, `container`, `remote-workspace`, `cloud`. Container and CI identities
-are unstable by nature; record them only when the mount and device name are stable.
-
-## Device metadata
-
-A device is a first-class record, not just a string on a place. Register it before
-recording its places so recall can respect device status and health:
-
-```ts
-registry.registerDevice({ id: "build-01", name: "CI builder", device_kind: "ssh",
-  host_kind: "cloud", location: "eu-west", tags: ["ci", "build"], health: "healthy" });
-registry.reportDeviceHealth("build-01", "healthy");
-registry.disableDevice("build-01"); // its places stop being recallable, audit trail survives
-registry.enableDevice("build-01");
-registry.listDevices({ status: "active" });
-```
-
-Places carry non-identity `concept_kind` and `rationale` metadata from the shared
-taxonomy, so context assembly can explain why a directory matters. `canonicalizePath`
-exposes the same path normalization the registry uses, so callers can compare paths
-without splitting one directory into two places. Disabled devices cannot gain new
-places and are excluded from recall; re-enabling is deliberate.
+`local`, `ssh`, `container`, `remote-workspace` and `cloud` are supported. Container and CI identities are unstable; record them only when the mount and device name remain stable.
 
 ## License
 

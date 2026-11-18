@@ -8,7 +8,7 @@
 - `vault.ts`：会话隔离的 HMAC 占位符和批量 SQLite 映射。
 - `hook.ts`：Claude/Codex 契约及本地编辑还原。
 - `../../bin/craft-datasec-hook.ts`：标准输入 JSON 到标准输出 JSON 的独立进程入口。
-- `build.ts`：只构建 `plugins/craft-datasec/dist/hook.mjs`。
+- 插件 bundle 由 Craft 源码仓库的 `scripts/release/build-datasec-plugin.ts` 构建；该构建入口不属于此 npm 子能力包。
 
 ```sh
 npm run build

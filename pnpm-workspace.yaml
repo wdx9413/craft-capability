@@ -1,7 +1,14 @@
 packages:
   - capability/*
 linkWorkspacePackages: false
-excludeLinksFromLockfile: true
+excludeLinksFromLockfile: false
 autoInstallPeers: false
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@craft/capability-knowledge@0.20.4'
+  - '@craft/capability-memory@0.20.4'
+  - craft-common-base@0.20.4
+  - craft-common-log@0.20.4
+  - craft-common-ontology@0.20.4
+  - craft-common-store-local@0.20.4

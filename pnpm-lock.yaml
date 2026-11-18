@@ -2,7 +2,7 @@ lockfileVersion: '9.0'
 
 settings:
   autoInstallPeers: false
-  excludeLinksFromLockfile: true
+  excludeLinksFromLockfile: false
 
 importers:
 
@@ -39,9 +39,6 @@ importers:
 
   capability/craft-experience:
     dependencies:
-      craft-common-ontology:
-        specifier: 0.20.4
-        version: 0.20.4
       '@craft/capability-knowledge':
         specifier: 0.20.4
         version: 0.20.4
@@ -49,6 +46,9 @@ importers:
         specifier: 0.20.4
         version: 0.20.4
       craft-common-log:
+        specifier: 0.20.4
+        version: 0.20.4
+      craft-common-ontology:
         specifier: 0.20.4
         version: 0.20.4
       craft-common-store-local:
@@ -66,9 +66,6 @@ importers:
 
   capability/craft-knowledge:
     dependencies:
-      craft-common-ontology:
-        specifier: 0.20.4
-        version: 0.20.4
       '@craft/capability-memory':
         specifier: 0.20.4
         version: 0.20.4
@@ -78,19 +75,22 @@ importers:
       craft-common-log:
         specifier: 0.20.4
         version: 0.20.4
+      craft-common-ontology:
+        specifier: 0.20.4
+        version: 0.20.4
       craft-common-store-local:
         specifier: 0.20.4
         version: 0.20.4
 
   capability/craft-memory:
     dependencies:
-      craft-common-ontology:
-        specifier: 0.20.4
-        version: 0.20.4
       craft-common-base:
         specifier: 0.20.4
         version: 0.20.4
       craft-common-log:
+        specifier: 0.20.4
+        version: 0.20.4
+      craft-common-ontology:
         specifier: 0.20.4
         version: 0.20.4
       craft-common-store-local:
@@ -98,6 +98,14 @@ importers:
         version: 0.20.4
 
 packages:
+
+  '@craft/capability-knowledge@0.20.4':
+    resolution: {integrity: sha512-/uyoL5MnkYp2nFi7VJ0mPxHAtnoXO0l12rV5GhmxSTuvfOJ/ZWQQ7S2e6nJInXwjiNfGKE1cx/NzqGA4AvXM7Q==}
+    engines: {node: '>=23'}
+
+  '@craft/capability-memory@0.20.4':
+    resolution: {integrity: sha512-ubBOvyyR+JP/cfC0dl/e70nBVnlbpQv1wQVPFbrrQfA0hO4CYhId7aG4so3tu+EfUhUuTknl8RTnIIxaYc5p1g==}
+    engines: {node: '>=23'}
 
   '@esbuild/aix-ppc64@0.28.2':
     resolution: {integrity: sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==}
@@ -258,6 +266,22 @@ packages:
   '@types/node@24.19.2':
     resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
 
+  craft-common-base@0.20.4:
+    resolution: {integrity: sha512-3oGyyGnBJ9LbzAVgsEp838DPIzV4Xe/0WTbUQqcrFGRLo+R5E9OOKWZMTi0mO4bJrnYltM9we+jmNlpCF0nH9g==}
+    engines: {node: '>=23'}
+
+  craft-common-log@0.20.4:
+    resolution: {integrity: sha512-RMoOxNbQmXhK0M2+JJcRbtFgaJMX0CbWsc8LjvO57+6aCJwx+TTjVD2XQva8P4Bo9+jOJGWx5vtswNQL4d3Dvg==}
+    engines: {node: '>=23'}
+
+  craft-common-ontology@0.20.4:
+    resolution: {integrity: sha512-5Kqf9F/neeAK6Y3+CRKJIILxsChn4VENeFk8B1a4ZhZpxeCz7CYpTu+500+8wrE7rhH+WJiRXFmuDDu8DpMYHQ==}
+    engines: {node: '>=23'}
+
+  craft-common-store-local@0.20.4:
+    resolution: {integrity: sha512-lGlLr8PIThQPVkRa5MQiNiIvNOdT6UxQVeGUB01jKQPTaWeNhhceMUDok6OK0mtn9cYIXcakpOSg0Ey2I3oeTA==}
+    engines: {node: '>=23'}
+
   esbuild@0.28.2:
     resolution: {integrity: sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==}
     engines: {node: '>=18'}
@@ -272,6 +296,21 @@ packages:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
 snapshots:
+
+  '@craft/capability-knowledge@0.20.4':
+    dependencies:
+      '@craft/capability-memory': 0.20.4
+      craft-common-base: 0.20.4
+      craft-common-log: 0.20.4
+      craft-common-ontology: 0.20.4
+      craft-common-store-local: 0.20.4
+
+  '@craft/capability-memory@0.20.4':
+    dependencies:
+      craft-common-base: 0.20.4
+      craft-common-log: 0.20.4
+      craft-common-ontology: 0.20.4
+      craft-common-store-local: 0.20.4
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
@@ -354,6 +393,19 @@ snapshots:
   '@types/node@24.19.2':
     dependencies:
       undici-types: 7.24.6
+
+  craft-common-base@0.20.4:
+    dependencies:
+      craft-common-store-local: 0.20.4
+
+  craft-common-log@0.20.4:
+    dependencies:
+      craft-common-base: 0.20.4
+      craft-common-store-local: 0.20.4
+
+  craft-common-ontology@0.20.4: {}
+
+  craft-common-store-local@0.20.4: {}
 
   esbuild@0.28.2:
     optionalDependencies:

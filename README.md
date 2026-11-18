@@ -9,7 +9,10 @@
 | `capability/craft-experience` | `@craft/capability-experience` |
 | `capability/craft-codebase` | `@craft/capability-codebase` |
 | `capability/craft-datasec` | `@craft/capability-datasec` |
-| `capability/craft-file-dir-desc` | `@craft/capability-file-dir-desc` |
+| `Craft Notes` (`capability/craft-file-dir-desc`) | `@craft/capability-file-dir-desc` |
+
+`Craft Notes` is the user-facing name. The package name, stored record kind
+(`file_dir_desc`) and existing tool identifiers remain stable for compatibility.
 
 `capability/craft-eval/` 只放指针说明：评测套件是独立仓库 `craft-eval`，不在此发布。
 
@@ -29,5 +32,5 @@ pnpm install
 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
 ```
 
-`tsconfig.json` 排除 `dist/` 与生成物；`craft-datasec/build.ts` 需要 `esbuild`，
-只在打包时执行，故不在源码 typecheck 范围内。
+`tsconfig.json` 排除 `dist/` 与生成物。Datasec 的 Host 插件 bundle 由 Craft 仓库中的
+`scripts/release/build-datasec-plugin.ts` 构建，不属于本仓库子能力包的 typecheck。

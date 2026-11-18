@@ -7,12 +7,8 @@
   "types": "./dist/rules.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/capability.d.ts",
-      "default": "./dist/capability.js"
-    },
-    "./build": {
-      "types": "./dist/build.d.ts",
-      "default": "./dist/build.js"
+      "types": "./dist/rules.d.ts",
+      "default": "./dist/rules.js"
     },
     "./hook": {
       "types": "./dist/hook.d.ts",
