@@ -1,6 +1,6 @@
 {
   "name": "@craft/capability-codebase",
-  "version": "0.20.4",
+  "version": "0.20.5",
   "description": "Craft internal read-only codebase structure capability",
   "type": "module",
   "main": "./dist/capability.js",
@@ -145,7 +145,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "analyzers"
   ],
   "license": "MIT",
   "types": "./dist/capability.d.ts",

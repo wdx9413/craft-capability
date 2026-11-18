@@ -1,6 +1,6 @@
 {
   "name": "@craft/capability-datasec",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Independent local text redaction hooks for Claude Code and Codex",
   "type": "module",
   "main": "./dist/rules.js",

@@ -222,7 +222,7 @@ function finiteLimit(value: unknown): number {
 /** A disabled device must not make its places recallable. */
 function deviceActive(store: CraftStore, deviceId: string): boolean {
   const record = store.find("device", deviceId);
-  return Boolean(record && record.status === "active");
+  return record ? record.status === "active" : deviceId === "local";
 }
 
 export class FileDirDescRegistry {
