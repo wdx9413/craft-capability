@@ -19,10 +19,13 @@ import { syncGraphVersionManifest } from "./graph-version-manifest.ts";
 import { ProcedurePlanner, validateProcedureComposition } from "./procedure-composition.ts";
 import { scopeEnvelope } from 'craft-common-base/scope-policy';
 import { validateConcept } from 'craft-common-ontology/validation';
+import { projectExperienceDirectory } from "./project-experience-directory.ts";
 
 const STAGES = ["shadow", "held_out", "signoff", "canary"] as const;
 type Stage = typeof STAGES[number];
 const KINDS = new Set(["workflow", "graph", "prompt"]);
+const RUNBOOK_FIELDS = ["applies_when", "exclude_when", "pitfall", "cause", "correct_method", "synthetic_example", "done_criteria", "failure_handling"] as const;
+const RUNBOOK_SECRET = /(?:api[_-]?key|authorization|cookie|password|secret|token)\s*[:=]\s*[^\s]{8,}/iu;
 
 function text(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must not be empty`);
@@ -49,6 +52,95 @@ export class ProcedureStore {
   readonly store: CraftStore;
   readonly definitions: ProcedureDefinitionStore;
   constructor(store: CraftStore) { this.store = store; this.definitions = new ProcedureDefinitionStore(store); }
+
+  /** Save a sanitized, project-local Runbook candidate from one verified Host observation. */
+  runbookCapture(args: JsonObject): JsonObject {
+    return this.store.transaction(() => this.captureRunbook(args));
+  }
+
+  private captureRunbook(args: JsonObject): JsonObject {
+    const observationId = text(args.observation_id, "observation_id");
+    const observation = this.store.get("workflow_evolution_observation", observationId);
+    const source = observation.source as JsonObject | undefined;
+    const scope = typeof source?.scope === "string" ? source.scope : "";
+    if (!/^project:[A-Za-z0-9_-]{1,96}$/u.test(scope) || observation.outcome !== "passed" || observation.lifecycle !== "accepted"
+      || typeof source?.kind !== "string" || !source.kind.startsWith("host:") || typeof source.session_id !== "string" || !source.session_id) {
+      throw new Error("Runbook capture requires one accepted, passing project-scoped Host observation");
+    }
+    projectExperienceDirectory(this.store, scope, undefined, true);
+    const evidenceIds = strings(observation.evidence_ids, "observation.evidence_ids", 1);
+    for (const id of evidenceIds) {
+      const evidence = this.store.get("evidence", id), metadata = evidence.metadata as JsonObject | undefined;
+      if (metadata?.provenance !== "host_completion_signal" || metadata?.verification_outcome !== "passed"
+        || metadata?.project_scope_id !== scope || metadata?.source_session_id !== source.session_id || metadata?.task_id !== source.id
+        || typeof metadata?.turn_id !== "string" || typeof metadata?.context_receipt_id !== "string" || metadata?.content_stored !== false) {
+        throw new Error("Runbook capture Evidence is not a matching verified Host completion signal");
+      }
+    }
+    const priorCandidate = this.store.list("experience_procedure", 1, item => item.runbook_candidate === true && item.observation_id === observation.id);
+    const priorDecision = this.store.list("experience_runbook_decision", 1, item => item.observation_id === observation.id);
+    if (args.decision === "no_new_learning") {
+      if (priorCandidate.length) throw new Error("A Runbook candidate already exists for this Observation");
+      const reason = text(args.reason, "reason");
+      if (!["no_reusable_learning", "insufficient_evidence", "too_sensitive", "other"].includes(reason)) throw new Error("Runbook skip reason is unsupported");
+      const identity = { observation_id: observation.id, observation_version: observation.version, scope, decision: "no_new_learning", reason };
+      const id = `experience_runbook_decision_${stableDigest(identity).slice(-20)}`;
+      const existing = this.store.find("experience_runbook_decision", id);
+      if (existing) return { decision: existing, idempotent: true };
+      if (priorDecision.length) throw new Error("A different no_new_learning decision already exists for this Observation");
+      return { decision: this.store.create("experience_runbook_decision", id, { ...identity, content_stored: false }), idempotent: false };
+    }
+    if (args.decision !== "capture") throw new Error("Runbook decision must be capture or no_new_learning");
+    if (priorDecision.length) throw new Error("A no_new_learning decision already exists for this Observation");
+    const fields = {} as Record<(typeof RUNBOOK_FIELDS)[number], string>;
+    for (const field of RUNBOOK_FIELDS) {
+      const value = text(args[field], field);
+      if (value.length > (field === "synthetic_example" ? 3_000 : 1_000) || RUNBOOK_SECRET.test(value) || /[\0]/u.test(value)) throw new Error(`${field} is unsafe or exceeds its size limit`);
+      fields[field] = value;
+    }
+    const title = text(args.title, "title");
+    if (title.length > 120 || RUNBOOK_SECRET.test(title)) throw new Error("Runbook title is unsafe or too long");
+    const signature = observation.scenario_signature as JsonObject | undefined;
+    const domain = typeof signature?.domain === "string" ? signature.domain : null;
+    const identity = { runbook_candidate: true, provenance: "verified_host_task", observation_id: observation.id, observation_version: observation.version,
+      session_id: source.session_id, scope, title, ...fields, evidence_ids: evidenceIds, domain, scenario_signature: signature ?? null };
+    const id = `experience_procedure_runbook_${stableDigest(identity).slice(-20)}`;
+    const existing = this.store.find("experience_procedure", id);
+    if (existing) {
+      if (existing.identity_digest !== stableDigest(identity)) throw new Error("Runbook capture idempotency conflict");
+      return { procedure: existing, idempotent: true };
+    }
+    if (priorCandidate.length) throw new Error("A different Runbook candidate already exists for this Observation");
+    const body = ["# " + title, "", "> 待验证：仅供同项目参考，不是可执行 Procedure。", "",
+      "## 适用范围", fields.applies_when, "", "## 不适用", fields.exclude_when, "", "## 踩坑现象", fields.pitfall,
+      "", "## 原因", fields.cause, "", "## 正确做法", fields.correct_method, "", "## 合成示例", "```text", fields.synthetic_example, "```",
+      "", "## 完成判据", fields.done_criteria, "", "## 失败处置", fields.failure_handling, "", "## 来源", `Observation: ${observation.id}@${observation.version}`,
+      `Evidence: ${evidenceIds.join(", ")}`, "", "## 实测时间与规模", "未测量：捕获来源不包含可核验的时间或规模数据。", ""].join("\n");
+    const contentRef = this.store.contentStore.writeSync({ kind: "experience", record_id: id, version: 1, scope, status: "candidate", sensitivity: "internal",
+      source_id: `host-observation:${String(observation.id)}`, title, body, folder: "prompts", frontmatter: { runbook_candidate: "true", routeable: "false" } });
+    const procedure = this.store.create("experience_procedure", id, { ...identity, version: 1, lifecycle: "candidate", completed_gates: [], procedure_kind: "prompt",
+      trigger: fields.applies_when, preconditions: [fields.exclude_when], allowed_effects: ["read"], acceptance_ref: fields.done_criteria,
+      failure_disposition: fields.failure_handling, evidence_ids: evidenceIds, content_ref: contentRef, content_digest: contentRef.digest,
+      identity_digest: stableDigest(identity), concept_kind: "procedure", routeable: false, publication_allowed: false, execution_visible: false });
+    return { procedure, idempotent: false, advisory_only: true };
+  }
+
+  /** Revoke an unpromoted Runbook candidate after human review. */
+  runbookRevoke(args: JsonObject): JsonObject {
+    return this.store.transaction(() => this.revokeRunbook(args));
+  }
+
+  private revokeRunbook(args: JsonObject): JsonObject {
+    const id = text(args.procedure_id, "procedure_id"), current = this.store.get("experience_procedure", id);
+    if (current.runbook_candidate !== true || current.lifecycle !== "candidate" || current.routeable === true) throw new Error("Only an unpromoted Runbook candidate can be revoked");
+    if (!Number.isSafeInteger(args.expected_version) || Number(args.expected_version) !== current.version) throw new Error("Runbook candidate version is stale");
+    const reason = text(args.reason, "reason");
+    if (!["not_reusable", "unsafe_content", "incorrect", "duplicate", "other"].includes(reason)) throw new Error("Runbook revocation reason is unsupported");
+    const procedure = this.store.updateIfVersion("experience_procedure", id, Number(current.version), { ...payload(current), lifecycle: "rolled_back",
+      routeable: false, publication_allowed: false, revoked_by: "explicit_user_review", revocation_reason: reason });
+    this.store.appendEvent(`experience-runbook:${id}`, "experience.runbook_revoked", { procedure_id: id, version: procedure.version, reason, content_stored: false });
+    return { procedure, revoked: true };
+  }
 
   /** Create a candidate Procedure from an existing bounded proposal record. */
   draft(args: JsonObject): JsonObject {
@@ -153,6 +245,7 @@ export class ProcedureStore {
 
   private recordGate(args: JsonObject): JsonObject {
     const procedure = this.store.get("experience_procedure", text(args.procedure_id, "procedure_id"));
+    if (procedure.runbook_candidate === true && args.passed === true) throw new Error("Runbook candidates cannot pass Procedure gates directly; submit their learning through the multi-observation evaluation flow");
     if (belongsToRetiredScenario(this.store, procedure)) throw new Error("Experience scenario is retired; Procedure cannot qualify");
     const stage = text(args.stage, "stage") as Stage; if (!(STAGES as readonly string[]).includes(stage)) throw new Error("Experience Procedure gate is unsupported");
     const expected = STAGES.indexOf(stage);
@@ -203,6 +296,10 @@ export class ProcedureStore {
     const id = text(args.procedure_id, "procedure_id");
     const procedure = args.release_channel === undefined ? this.store.get("experience_procedure", id, args.version === undefined ? undefined : Number(args.version)) : selectedProcedure(this.store, id, args.release_channel);
     if (!procedure) throw new Error("Procedure release unavailable");
+    if (procedure.runbook_candidate === true && procedure.content_ref) {
+      const content = this.store.contentStore.readCompatSync(procedure.content_ref as never);
+      return { procedure, runbook: { status: "待验证", executable: false, body: content.body } };
+    }
     return { procedure };
   }
 

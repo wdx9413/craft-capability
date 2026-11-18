@@ -118,7 +118,7 @@ export class KnowledgeSourceRegistry {
       { relative_path: ".serena/memories", kind: "serena", label: "Serena Project Memories" },
     ];
     const discoveredSourceIds = candidates.map(candidate => `project_autodiscovered_${stableDigest({ scope, root, path: candidate.relative_path }).slice(-24)}`);
-    let registered = 0, ingested = 0, candidateCount = 0, skipped = 0, partialIngests = 0, failedIngests = 0, reactivated = 0;
+    let registered = 0, ingested = 0, candidateCount = 0, skipped = 0, partialIngests = 0, failedIngests = 0, retryDeferred = 0, reactivated = 0;
     const sourceRefs: string[] = [];
     for (const candidate of candidates) {
       const locator = join(root, candidate.relative_path);
@@ -140,7 +140,17 @@ export class KnowledgeSourceRegistry {
       const result = this.sourceRegister({ source_id: sourceId, kind: candidate.kind, label: candidate.label, scope_kind: scope.kind, scope_id: scope.id,
         locator: realLocator, content_digest: stableDigest({ schema: "craft.project-knowledge-source.v1", scope, path: candidate.relative_path }), trust: "bounded", access: "read_only" });
       sourceRefs.push(sourceId);
-      if (result.idempotent !== true) {
+      const latestReceipt = result.idempotent === true
+        ? this.store.listScoped("knowledge_ingest_receipt", [scope], 1_000, item => item.source_id === sourceId, undefined, { hydrateContent: false })[0]
+        : undefined;
+      const latestStatus = String(latestReceipt?.status ?? "");
+      const retryableFailure = latestStatus === "failed" || latestStatus === "unavailable";
+      const receiptTime = Date.parse(String(latestReceipt?.updated_at ?? ""));
+      const retryAfterCooldown = !Number.isFinite(receiptTime) || Date.now() - receiptTime >= 60_000;
+      const shouldIngest = result.idempotent !== true || !latestReceipt
+        || retryableFailure && (args.retry_failed === true || retryAfterCooldown);
+      if (result.idempotent === true && retryableFailure && !shouldIngest) { failedIngests++; retryDeferred++; }
+      if (shouldIngest) {
         if (result.reactivated === true) reactivated++;
         registered++;
         try {
@@ -149,7 +159,7 @@ export class KnowledgeSourceRegistry {
             ingested++;
             if (output.status === "partial") partialIngests++;
             candidateCount += Array.isArray(output.candidates) ? output.candidates.length : 0;
-          }
+          } else if (output.status === "unavailable") failedIngests++;
         } catch { failedIngests++; /* One malformed project document must not prevent the other bounded Sources. */ }
       }
     }
@@ -159,7 +169,7 @@ export class KnowledgeSourceRegistry {
       ...(transition.failed > 0 ? { reason: "source_transition_incomplete" }
         : partialIngests > 0 || failedIngests > 0 ? { reason: "source_ingest_incomplete" } : {}),
       sources_registered: registered, sources_ingested: ingested, candidates_created: candidateCount,
-      skipped_sources: skipped, partial_ingests: partialIngests, failed_ingests: failedIngests, sources_disabled: transition.disabled,
+      skipped_sources: skipped, partial_ingests: partialIngests, failed_ingests: failedIngests, retry_deferred_sources: retryDeferred, sources_disabled: transition.disabled,
       sources_transition_failed: transition.failed, source_transition_failure_codes: transition.failure_codes,
       sources_reactivated: reactivated, source_refs: sourceRefs };
   }
@@ -341,7 +351,8 @@ export class KnowledgeSourceRegistry {
     const selected = documents.slice(offset, offset + maxFiles), nextOffset = offset + selected.length;
     const revisionId = String(args.revision_id ?? `knowledge_source_revision_${String(source.id)}_${revisionDigest.slice(-16)}`);
     const rootDigest = stableDigest(root);
-    const scopeKey = `${(source.scope as JsonObject).kind}:${(source.scope as JsonObject).id}`;
+    const sourceScope = source.scope as JsonObject;
+    const scopeKey = `${sourceScope.kind}:${sourceScope.id}`;
     const observationKey = `knowledge-source:${String(source.id)}`;
     // Collection scans and candidate/support grouping are read work. Keep them
     // outside BEGIN IMMEDIATE so a large source cannot reserve SQLite's single
@@ -349,7 +360,8 @@ export class KnowledgeSourceRegistry {
     const priorDocuments = this.store.list("knowledge_document", 10_001, doc => doc.source_id === source.id && doc.root_digest === rootDigest);
     const priorClaims = this.store.list("knowledge_claim", 100_000, item => item.source_id === source.id && Boolean(item.source_revision_id), false,
       { source_ids: [String(source.id)], document_ids: [] });
-    const sharedClaims = this.store.list("knowledge_claim", 100_000, item => item.status === "candidate" && item.scope === scopeKey);
+    const sharedClaims = this.store.listScoped("knowledge_claim", [{ kind: String(sourceScope.kind), id: String(sourceScope.id) }], 100_000,
+      item => item.status === "candidate" && item.scope === scopeKey, undefined, { hydrateContent: false });
     const sourceSupports = this.store.list("knowledge_claim_support", 10_000, item => item.observation_key === observationKey);
     const priorRevisions = this.store.list("knowledge_source_revision", 10_000,
       item => item.source_id === source.id && item.id !== revisionId && item.locator_digest === rootDigest && item.status === "current");

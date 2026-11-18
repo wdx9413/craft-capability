@@ -1,9 +1,8 @@
 import { ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";
 import { observeOperation } from 'craft-common-log/index';
 /**
- * The Experience read side: routeable Procedures are the only Experience material
- * eligible for Context. Workflow and Graph additionally carry their checked JSON
- * definition; Prompt Procedures carry Markdown only.
+ * The Experience read side: routeable Procedures and explicitly non-executable,
+ * same-project Runbook candidates are the only Experience material eligible for Context.
  *
  * This is the constraint that shapes the whole file, and it is not a policy choice — it is what
  * the ledger's data model permits. `compile` stores
@@ -50,7 +49,7 @@ export class ExperienceContribution implements ContextContributionProvider {
   constructor(store: CraftStore) { this.store = store; }
 
   /**
-   * Select routeable Procedures that match this scoped decision point.
+   * Select routeable Procedures and same-project advisory Runbooks that match this decision point.
    *
    * Matching is deliberately scoped and bounded. Experience is a Context member alongside
    * Knowledge and Memory, but it never reads an unscoped legacy record or a diagnostic pattern.
@@ -100,6 +99,28 @@ export class ExperienceContribution implements ContextContributionProvider {
     const selected: Array<{ item: JsonObject; reference: string }> = procedures
       .map((candidate) => ({ item: { ...descriptions.get(String(candidate.procedure.id))!, ranking_weight: candidate.weight },
         reference: `procedure:${String(candidate.procedure.id)}@${Number(candidate.procedure.version)}` }));
+    // One-task Runbooks are useful only as explicitly labeled advice, never as
+    // executable Procedure pointers. Keep them inside the exact project scope.
+    const projectScopes = scopes.filter(scope => scope.kind === "project");
+    const runbooks = projectScopes.length ? this.store.listScoped("experience_procedure", projectScopes, 101, procedure =>
+      procedure.runbook_candidate === true && procedure.lifecycle === "candidate" && procedure.routeable !== true
+      && projectScopes.some(scope => matchesScope(procedure.scope, scope))
+      && scopeAllows(scopeEnvelope(procedure.scope_envelope, recordScope(procedure.scope)), access)
+      && (request.domain === undefined ? (procedure.domain ?? null) === null : procedure.domain === request.domain)) : [];
+    if (runbooks.length > 100) throw new Error("Experience Runbook candidate budget exceeded; narrow the project scope");
+    for (const procedure of runbooks) {
+      const ref = procedure.content_ref;
+      if (!ref || typeof ref !== "object") continue;
+      const content = this.store.contentStore.readCompatSync(ref as never);
+      const retrievalText = `${String(procedure.title)} ${String(procedure.applies_when)} ${String(procedure.pitfall)} ${String(procedure.correct_method)}`;
+      const score = wanted.reduce((sum, term) => sum + Number(retrievalText.toLowerCase().includes(term)), 0);
+      if (!score) continue;
+      const item: JsonObject = { kind: "experience_runbook_candidate", status: "待验证", executable: false, routeable: false,
+        scope: recordScope(procedure.scope), procedure_id: String(procedure.id), procedure_version: Number(procedure.version), title: String(procedure.title),
+        retrieval_text: retrievalText, body: String(content.body), source_observation_id: String(procedure.observation_id),
+        source_evidence_ids: procedure.evidence_ids, score };
+      selected.push({ item, reference: `runbook-candidate:${String(procedure.id)}@${Number(procedure.version)}` });
+    }
     const items: JsonObject[] = [];
     let usedChars = 0;
     const selectedReferences: string[] = [];
@@ -121,7 +142,7 @@ export class ExperienceContribution implements ContextContributionProvider {
       receipt_id: `experience_contribution_${selectedReferences.join("+") || "none"}`,
       omitted_count: selected.length - items.length,
       diagnostics: { scoped_procedure_count: scoped.length, has_draft: hasDraft, routeable_count: eligible.length, candidate_count: scoped.filter(p => p.lifecycle === "candidate").length,
-        reason: eligible.length ? items.length ? "recalled_not_bound" : "query_or_budget_not_matched" : scoped.length ? "no_promoted_release" : hasDraft ? "draft_not_submitted" : "no_accessible_procedure_in_scope",
+        runbook_candidate_count: runbooks.length, reason: eligible.length || runbooks.length ? items.length ? "recalled_not_bound" : "query_or_budget_not_matched" : scoped.length ? "no_promoted_release" : hasDraft ? "draft_not_submitted" : "no_accessible_procedure_in_scope",
         next_tool: "craft_experience_graph_inspect", next_action: "diagnose", execution_started: false },
     };
   }
@@ -132,6 +153,17 @@ export class ExperienceContribution implements ContextContributionProvider {
       ? new ProcedureDefinitionStore(this.store).read(procedure.definition_ref).definition : null;
     const control = definition?.graph_control as JsonObject | undefined;
     const routes = Array.isArray(control?.subscenarios) ? (control.subscenarios as JsonObject[]).map(s => ({ id: s.id, title: s.title, entry_id: s.entry_id, exit_id: s.exit_id })) : [];
+    // Context has a 1,200-character shared budget. A full Graph entrypoint (including
+    // routes, preconditions and input contracts) can exceed that budget by itself, so
+    // inject only bounded labels and let graph_inspect resolve the exact route on demand.
+    const entrypoints = Array.isArray(procedure.entrypoints)
+      ? (procedure.entrypoints as JsonObject[]).slice(0, 8).map(entry => ({
+        id: String(entry.id ?? "").slice(0, 80),
+        title: String(entry.title ?? entry.id ?? "").slice(0, 100),
+      })) : [];
+    const routeTitles = routes.slice(0, 8).map(route => String(route.title ?? "").slice(0, 100)).filter(Boolean);
+    const title = String(procedure.title).slice(0, 120);
+    const trigger = String(procedure.trigger).slice(0, 180);
     return {
       kind: "experience_procedure",
       scope: recordScope(procedure.scope),
@@ -139,9 +171,10 @@ export class ExperienceContribution implements ContextContributionProvider {
       procedure_id: String(procedure.id),
       procedure_version: Number(procedure.version),
       procedure_kind: String(procedure.procedure_kind),
-      trigger: String(procedure.trigger),
-      retrieval_text: `${String(procedure.trigger)} ${String(procedure.title)} ${JSON.stringify(procedure.entrypoints ?? [])} ${JSON.stringify(routes)}`,
-      ...(Array.isArray(procedure.entrypoints) ? { entrypoints: procedure.entrypoints } : {}),
+      title,
+      trigger,
+      retrieval_text: [trigger, title, ...entrypoints.map(entry => entry.title), ...routeTitles].join(" ").slice(0, 500),
+      ...(entrypoints.length ? { entrypoints } : {}),
       acceptance_ref: String(procedure.acceptance_ref),
       scenario_signature: procedure.scenario_signature,
       content_digest: procedure.content_digest,

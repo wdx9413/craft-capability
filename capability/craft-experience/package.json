@@ -1,6 +1,6 @@
 {
   "name": "@craft/capability-experience",
-  "version": "0.20.5",
+  "version": "0.20.9",
   "description": "Craft Experience capability: content-free observations, bounded Workflow evolution, and evaluation model profiles",
   "type": "module",
   "main": "./dist/capability.js",

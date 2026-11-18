@@ -22,10 +22,10 @@
 import { isAbsolute, resolve, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { type CraftStore, type JsonObject } from 'craft-common-store-local/store';
-import { CraftNotesRegistry, type CraftNoteTextValidator } from "./notes.ts";
+import { CraftNotesRegistry, type CraftNoteTextValidator } from "./craft-note-lifecycle.ts";
 
 /** Below this count a directory is only "observed"; at/above it becomes "promoted". */
-export const PROMOTION_USE_THRESHOLD = 3;
+export const CRAFT_NOTES_LOCATION_USE_THRESHOLD = 3;
 
 /** Stable device metadata: who, where and how the device is reached. */
 export interface DeviceRecord {
@@ -57,7 +57,7 @@ export interface RegisterDeviceArgs {
   device_note: string;
 }
 
-export interface FileDirDescRecord {
+export interface CraftNotesLocationRecord {
   id: string;
   /** Stable device identity; `local` only means "the device running this process". */
   deviceId: string;
@@ -139,7 +139,7 @@ function normalizeDeviceStatus(value: unknown): DeviceRecord["status"] {
 }
 
 /** Canonicalize a host path so two spellings of the same directory never split into places. */
-export function canonicalizePath(path: string): string {
+export function canonicalizeNotePath(path: string): string {
   const trimmed = path.trim();
   if (!trimmed) throw new Error("path must be a non-empty string");
   const windowsRooted = /^[a-z]:[\\/]/iu.test(trimmed) || trimmed.startsWith("\\\\");
@@ -170,7 +170,7 @@ function repoPayload(value: RepoIdentity | null): JsonObject | null {
   return value === null ? null : { remote_url: value.remoteUrl, commit: value.commit };
 }
 
-function toRecord(payload: JsonObject): FileDirDescRecord {
+function toRecord(payload: JsonObject): CraftNotesLocationRecord {
   return {
     id: String(payload.id),
     deviceId: String(payload.device_id ?? "local"),
@@ -225,12 +225,13 @@ function deviceActive(store: CraftStore, deviceId: string): boolean {
   return record ? record.status === "active" : deviceId === "local";
 }
 
-export class FileDirDescRegistry {
+export class CraftNotesLocationRegistry {
   readonly store: CraftStore;
   readonly notes: CraftNotesRegistry;
   constructor(store: CraftStore, validateNoteText?: CraftNoteTextValidator) {
     this.store = store;
     this.notes = new CraftNotesRegistry(store, validateNoteText);
+    migrateLegacyLocationRows(store);
   }
 
   /** Register or update device metadata. Disabled devices stop being recallable. */
@@ -326,28 +327,28 @@ export class FileDirDescRegistry {
     // unbounded cap: 1_000 would silently create duplicate entries per place.
     // The identity of a place is (device, path); two devices may legitimately
     // hold the same absolute path and must not be merged.
-    const existing = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER,
+    const existing = this.store.list("craft_notes_location", Number.MAX_SAFE_INTEGER,
       (item) => item.path === path && String(item.device_id ?? "local") === deviceId)[0];
     if (existing) {
       const useCount = Number(existing.use_count ?? 0) + 1;
       // A withdrawn entry stays withdrawn: only an explicit promote revives it.
       const withdrawn = existing.status === "revoked";
-      const promoted = !withdrawn && (forcePromote || useCount >= PROMOTION_USE_THRESHOLD);
+      const promoted = !withdrawn && (forcePromote || useCount >= CRAFT_NOTES_LOCATION_USE_THRESHOLD);
       const payload = { ...existing, device_id: deviceId, device_kind: deviceKind, description, host_kind: hostKind,
         repo_identity: repoPayload(repoIdentity), use_count: useCount,
         status: withdrawn ? "revoked" : promoted ? "promoted" : "observed", updated_at: now, last_used_at: now,
         concept_kind: conceptKind ?? existing.concept_kind, rationale: rationale ?? existing.rationale };
-      this.store.save("file_dir_desc", String(existing.id), payload);
+      this.store.save("craft_notes_location", String(existing.id), payload);
       return toRecord(payload) as unknown as JsonObject;
     }
     const id = String(args.id ?? `fdd_${randomUUID()}`);
     const useCount = 1;
-    const promoted = forcePromote || useCount >= PROMOTION_USE_THRESHOLD;
+    const promoted = forcePromote || useCount >= CRAFT_NOTES_LOCATION_USE_THRESHOLD;
     const payload = { id, device_id: deviceId, device_kind: deviceKind, path, description, host_kind: hostKind,
       repo_identity: repoPayload(repoIdentity), use_count: useCount,
       status: promoted ? "promoted" : "observed", created_at: now, updated_at: now, last_used_at: now,
       concept_kind: conceptKind ?? null, rationale };
-    this.store.save("file_dir_desc", id, payload);
+    this.store.save("craft_notes_location", id, payload);
     return toRecord(payload) as unknown as JsonObject;
   }
 
@@ -366,18 +367,18 @@ export class FileDirDescRegistry {
     const conceptKind = args.concept_kind === undefined || args.concept_kind === null ? null : String(args.concept_kind);
     const rationale = args.rationale === undefined || args.rationale === null ? null : normalizeDescription(args.rationale);
     const now = new Date().toISOString();
-    const existing = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER,
+    const existing = this.store.list("craft_notes_location", Number.MAX_SAFE_INTEGER,
       (item) => item.path === path && String(item.device_id ?? "local") === deviceId)[0];
     if (existing) {
       const useCount = Number(existing.use_count ?? 0) + 1;
       const withdrawn = existing.status === "revoked";
-      const promoted = !withdrawn && useCount >= PROMOTION_USE_THRESHOLD;
+      const promoted = !withdrawn && useCount >= CRAFT_NOTES_LOCATION_USE_THRESHOLD;
       const payload = { ...existing, device_id: deviceId, device_kind: deviceKind, host_kind: hostKind,
         repo_identity: repoPayload(repoIdentity) ?? existing.repo_identity ?? null, use_count: useCount,
         status: withdrawn ? "revoked" : promoted ? "promoted" : "observed", updated_at: now, last_used_at: now,
         concept_kind: existing.concept_kind ?? conceptKind ?? null,
         rationale: existing.rationale ?? rationale ?? null };
-      this.store.save("file_dir_desc", String(existing.id), payload);
+      this.store.save("craft_notes_location", String(existing.id), payload);
       return toRecord(payload) as unknown as JsonObject;
     }
     // Seeding needs a description; callers without one are recorded with the
@@ -389,7 +390,7 @@ export class FileDirDescRegistry {
     const payload = { id, device_id: deviceId, device_kind: deviceKind, path, description, host_kind: hostKind,
       repo_identity: repoPayload(repoIdentity), use_count: 1, status: "observed", concept_kind: conceptKind ?? null, rationale,
       created_at: now, updated_at: now, last_used_at: now };
-    this.store.save("file_dir_desc", id, payload);
+    this.store.save("craft_notes_location", id, payload);
     return toRecord(payload) as unknown as JsonObject;
   }
 
@@ -401,19 +402,19 @@ export class FileDirDescRegistry {
   relocate(args: JsonObject): JsonObject {
     const id = text(args.id, "id");
     const toPath = normalizePath(args.path);
-    const existing = this.store.find("file_dir_desc", id);
-    if (!existing) throw new Error(`Unknown file_dir_desc: ${id}`);
+    const existing = this.store.find("craft_notes_location", id);
+    if (!existing) throw new Error(`Unknown craft_notes_location: ${id}`);
     // Relocation stays on the same device; moving a place to another machine is
     // a new place, not a rename.
     const deviceId = normalizeDeviceId(args.device_id ?? existing.device_id);
     if (deviceId !== String(existing.device_id ?? "local")) throw new Error("relocate cannot move a place to another device; record it on that device instead");
-    const conflict = this.store.list("file_dir_desc", Number.MAX_SAFE_INTEGER,
+    const conflict = this.store.list("craft_notes_location", Number.MAX_SAFE_INTEGER,
       (item) => item.path === toPath && String(item.device_id ?? "local") === deviceId && String(item.id) !== id)[0];
     if (conflict) throw new Error(`another entry already describes ${toPath}; withdraw it first`);
     const now = new Date().toISOString();
     const payload = { ...existing, path: toPath, relocated_from: String(existing.path), relocated_at: now, updated_at: now,
       concept_kind: existing.concept_kind ?? null, rationale: existing.rationale ?? null };
-    this.store.save("file_dir_desc", id, payload);
+    this.store.save("craft_notes_location", id, payload);
     return toRecord(payload) as unknown as JsonObject;
   }
 
@@ -426,29 +427,29 @@ export class FileDirDescRegistry {
     const id = text(args.id, "id");
     const actor = boundedActor(args.revoked_by, "revoked_by");
     const reason = text(args.reason, "reason");
-    const existing = this.store.find("file_dir_desc", id);
-    if (!existing) throw new Error(`Unknown file_dir_desc: ${id}`);
+    const existing = this.store.find("craft_notes_location", id);
+    if (!existing) throw new Error(`Unknown craft_notes_location: ${id}`);
     const now = new Date().toISOString();
     const conceptKind = args.concept_kind === undefined || args.concept_kind === null ? null : String(args.concept_kind);
     const rationale = args.rationale === undefined || args.rationale === null ? null : normalizeDescription(args.rationale);
     const payload = { ...existing, status: "revoked", revoked_by: actor, revoked_reason: reason,
       revoked_at: now, updated_at: now, concept_kind: conceptKind, rationale };
-    this.store.save("file_dir_desc", id, payload);
+    this.store.save("craft_notes_location", id, payload);
     return toRecord(payload) as unknown as JsonObject;
   }
 
   /** Promote an observed entry regardless of use count (explicit user action). */
   promote(args: JsonObject): JsonObject {
     const id = text(args.id, "id");
-    const existing = this.store.find("file_dir_desc", id);
-    if (!existing) throw new Error(`Unknown file_dir_desc: ${id}`);
+    const existing = this.store.find("craft_notes_location", id);
+    if (!existing) throw new Error(`Unknown craft_notes_location: ${id}`);
     const now = new Date().toISOString();
     const conceptKind = args.concept_kind === undefined || args.concept_kind === null ? null : String(args.concept_kind);
     const rationale = args.rationale === undefined || args.rationale === null ? null : normalizeDescription(args.rationale);
-    this.store.save("file_dir_desc", id, { ...existing, status: "promoted", updated_at: now,
+    this.store.save("craft_notes_location", id, { ...existing, status: "promoted", updated_at: now,
       revoked_by: null, revoked_reason: null, concept_kind: conceptKind ?? existing.concept_kind ?? null,
       rationale: rationale ?? existing.rationale ?? null });
-    const saved = this.store.find("file_dir_desc", id);
+    const saved = this.store.find("craft_notes_location", id);
     if (!saved) throw new Error(`Promoted entry ${id} disappeared`);
     return toRecord(saved) as unknown as JsonObject;
   }
@@ -470,7 +471,7 @@ export class FileDirDescRegistry {
       const deviceId = args.device_id === undefined || args.device_id === null ? null : normalizeDeviceId(args.device_id);
       const repoIdentity = normalizeRepoIdentity(args.repo_identity);
       const matches = this.store
-        .list("file_dir_desc", 1_000, (item) => item.status === "promoted"
+        .list("craft_notes_location", 1_000, (item) => item.status === "promoted"
           && termMatch(String(item.description), description)
           && (deviceId === null ? true : String(item.device_id ?? "local") === deviceId)
           && (repoIdentity === null ? true : sameRepo(item.repo_identity, repoIdentity))
@@ -482,7 +483,7 @@ export class FileDirDescRegistry {
     if (args.path !== undefined && args.path !== null) {
       const path = normalizePath(args.path);
       const deviceId = args.device_id === undefined || args.device_id === null ? null : normalizeDeviceId(args.device_id);
-      const entries = this.store.list("file_dir_desc", 1_000, (item) => item.path === path
+      const entries = this.store.list("craft_notes_location", 1_000, (item) => item.path === path
         && (deviceId === null ? true : String(item.device_id ?? "local") === deviceId)
         && (String(item.status) !== "revoked" ? deviceActive(this.store, String(item.device_id ?? "local")) : true)).map(toRecord);
       return { kind: "by_path", path, results: entries };
@@ -498,12 +499,20 @@ export class FileDirDescRegistry {
     const items = this.store
       // The predicate scan ignores SQL LIMIT, so this bound only guards the
       // in-memory sort; a small cap here would hide entries from `record`.
-      .list("file_dir_desc", Number.MAX_SAFE_INTEGER, (item) => (status === null || item.status === status)
+      .list("craft_notes_location", Number.MAX_SAFE_INTEGER, (item) => (status === null || item.status === status)
         && (hostKind === null || (hostKind === "cloud" ? item.host_kind === "cloud" : item.host_kind !== "cloud"))
         && (deviceId === null || String(item.device_id ?? "local") === deviceId))
       .map(toRecord)
       .sort((a, b) => b.useCount - a.useCount || (a.updatedAt < b.updatedAt ? 1 : -1));
     return { items: items.slice(0, limit) };
+  }
+}
+
+/** Move legacy rows to the renamed collection once, preserving IDs and audit fields. */
+function migrateLegacyLocationRows(store: CraftStore): void {
+  for (const legacy of store.list("file_dir_desc", Number.MAX_SAFE_INTEGER)) {
+    const id = String(legacy.id);
+    if (!store.find("craft_notes_location", id)) store.save("craft_notes_location", id, legacy);
   }
 }
 

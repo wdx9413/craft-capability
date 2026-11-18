@@ -1,6 +1,6 @@
 {
-  "name": "@craft/capability-file-dir-desc",
-  "version": "0.20.6",
+  "name": "@craft/craft-notes",
+  "version": "0.20.7",
   "description": "Craft Notes: an evolving registry of human-readable notes for directories across devices",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,9 +9,9 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./file-dir-desc": {
-      "types": "./dist/file-dir-desc.d.ts",
-      "default": "./dist/file-dir-desc.js"
+    "./craft-notes-location": {
+      "types": "./dist/craft-notes-location.d.ts",
+      "default": "./dist/craft-notes-location.js"
     },
     "./index": {
       "types": "./dist/index.d.ts",

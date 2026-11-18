@@ -1,6 +1,6 @@
 # Craft Notes
 
-`@craft/capability-file-dir-desc` remains the package identifier for compatibility. The unified public capability is **Craft Notes** and stores typed Device, Directory and File notes in the existing Craft Store.
+`@craft/craft-notes` is the package identifier. The unified public capability is **Craft Notes** and stores typed Device, Directory and File notes in the existing Craft Store.
 
 ## Rules
 
@@ -13,7 +13,7 @@
 ## Example
 
 ```ts
-import { CraftNotesRegistry } from "@craft/capability-file-dir-desc";
+import { CraftNotesRegistry } from "@craft/craft-notes";
 
 const notes = new CraftNotesRegistry(store);
 notes.createDevice({ id: "laptop", note: "主力开发机，运行本地模型" });
@@ -29,13 +29,13 @@ const candidate = notes.observeDirectory({
 // A human must confirm the exact candidate before it is recalled by default.
 ```
 
-The previous `FileDirDescRegistry` and `craft_file_dir_desc_*` names remain compatibility surfaces. New integrations should use `CraftNotesRegistry` and `craft_notes_*` operations.
+`CraftNotesRegistry` manages typed notes. `CraftNotesLocationRegistry` manages directory locations and device metadata as part of the same Craft Notes package. New MCP operations use the `craft_notes_*` namespace.
 
 ## Compatibility API
 
-`FileDirDescRegistry` and the existing `craft_file_dir_desc_*` operations remain available for legacy place records. Device registration through this API also requires a user-authored `device_note`; re-enabling a disabled device requires a confirmed Device Note. Existing device kind, host kind, location, tags and health metadata remain supported.
+Existing installations may contain directory locations in the `file_dir_desc` store collection. The package copies those rows idempotently to `craft_notes_location` on first open, preserving IDs, status and audit fields; all new reads and writes use the renamed collection. Device registration requires a user-authored `device_note`; re-enabling a disabled device requires a confirmed Device Note. Existing device kind, host kind, location, tags and health metadata remain supported.
 
-Legacy directory records retain their `concept_kind` and `rationale` fields, repository identity, use count and revocation audit. New integrations that manage Device, Directory and File Notes should use `CraftNotesRegistry`; the older registry remains for compatibility with existing place records.
+Directory locations retain their `concept_kind` and `rationale` fields, repository identity, use count and revocation audit. Device, Directory and File Notes are exposed under the Craft Notes package.
 
 ## Device kinds
 

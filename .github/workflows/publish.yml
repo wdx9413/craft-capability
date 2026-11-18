@@ -26,7 +26,7 @@ jobs:
       - run: pnpm -r run build
       # Bottom-up so cross-capability dependencies resolve from the registry.
       - run: pnpm --dir capability/craft-datasec publish --provenance --access public --no-git-checks
-      - run: pnpm --dir capability/craft-file-dir-desc publish --provenance --access public --no-git-checks
+      - run: pnpm --dir capability/craft-notes publish --provenance --access public --no-git-checks
       - run: pnpm --dir capability/craft-memory publish --provenance --access public --no-git-checks
       - run: pnpm --dir capability/craft-knowledge publish --provenance --access public --no-git-checks
       - run: pnpm --dir capability/craft-experience publish --provenance --access public --no-git-checks

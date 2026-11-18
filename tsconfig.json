@@ -13,6 +13,6 @@
     "types": ["node"],
     "erasableSyntaxOnly": true
   },
-  "include": ["capability/craft-datasec/**/*.ts", "capability/craft-knowledge/**/*.ts", "capability/craft-memory/**/*.ts", "capability/craft-experience/**/*.ts", "capability/craft-codebase/**/*.ts", "capability/craft-file-dir-desc/**/*.ts"],
+  "include": ["capability/craft-datasec/**/*.ts", "capability/craft-knowledge/**/*.ts", "capability/craft-memory/**/*.ts", "capability/craft-experience/**/*.ts", "capability/craft-codebase/**/*.ts", "capability/craft-notes/**/*.ts"],
   "exclude": ["capability/**/dist", "capability/**/node_modules", "capability/**/*.d.ts", "capability/craft-datasec/build.ts"]
 }

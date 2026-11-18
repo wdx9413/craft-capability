@@ -9,10 +9,11 @@
 | `capability/craft-experience` | `@craft/capability-experience` |
 | `capability/craft-codebase` | `@craft/capability-codebase` |
 | `capability/craft-datasec` | `@craft/capability-datasec` |
-| `Craft Notes` (`capability/craft-file-dir-desc`) | `@craft/capability-file-dir-desc` |
+| `Craft Notes` (`capability/craft-notes`) | `@craft/craft-notes` |
 
-`Craft Notes` is the user-facing name. The package name, stored record kind
-(`file_dir_desc`) and existing tool identifiers remain stable for compatibility.
+`Craft Notes` is the product and package name. Directory locations are one typed
+Note subtype stored as `craft_notes_location`; the old `file_dir_desc` collection
+is copied idempotently on first open so existing user data keeps its IDs and audit fields.
 
 `capability/craft-eval/` 只放指针说明：评测套件是独立仓库 `craft-eval`，不在此发布。
 
