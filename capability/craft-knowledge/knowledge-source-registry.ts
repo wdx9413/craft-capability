@@ -27,12 +27,13 @@ import { operationErrorCode } from 'craft-common-log/operation';
 import { knowledgeDirectoryForScope, projectRootForKnowledgeSource } from "./project-knowledge-content.ts";
 import { scopeEnvelope } from 'craft-common-base/scope-policy';
 import { updateKnowledgeScenarioClaim } from "./scenario-catalog.ts";
+import { trustedOrganizationSourceDigests } from "./organization-source-trust.ts";
 
 const SOURCE_KINDS = new Set(["evidence_wiki", "serena", "kefu_wiki", "project_note", "readme", "custom"]);
 const TRUSTS = new Set(["untrusted", "bounded", "verified"]);
 const ACCESS = new Set(["read_only", "proposal_only"]);
 const TRANSITIONS = new Set(["disabled", "revoked"]);
-const INGESTIBLE = new Set([".md", ".mdx", ".txt"]);
+const INGESTIBLE = new Set([".md", ".mdx", ".txt", ".json", ".yaml", ".yml", ".toml", ".lock"]);
 function digest(value: string): string { return `sha256:${createHash("sha256").update(value).digest("hex")}`; }
 function knowledgeScenarioScope(record: JsonObject): string | undefined {
   const contentRef = record.content_ref && typeof record.content_ref === "object" && !Array.isArray(record.content_ref)
@@ -112,33 +113,59 @@ export class KnowledgeSourceRegistry {
     const root = this.resolvePath(projectRoot);
     const scope = parseScope({ scope_kind: args.scope_kind, scope_id: args.scope_id });
     if (scope.kind !== "project") throw new Error("Project Knowledge discovery requires project scope");
+    // Keep discovery explicit. Repository text can contain arbitrary instructions,
+    // so a project cannot widen discovery by adding a manifest, glob, or prompt file.
+    // Every selected document still enters as a bounded, unreviewed candidate.
     const candidates = [
       { relative_path: "README.md", kind: "readme", label: "Project README" },
       { relative_path: "AGENTS.md", kind: "project_note", label: "Project Agent Instructions" },
       { relative_path: ".serena/memories", kind: "serena", label: "Serena Project Memories" },
+      { relative_path: "docs/architecture", kind: "project_note", label: "Project Architecture Documents" },
+      { relative_path: "docs/development", kind: "project_note", label: "Project Development Documents" },
+      { relative_path: ".github/workflows", kind: "project_note", label: "Project CI Workflows" },
+      { relative_path: "package.json", kind: "project_note", label: "Project Package Manifest" },
+      { relative_path: "package-lock.json", kind: "project_note", label: "Project Dependency Lockfile" },
+      { relative_path: "pnpm-lock.yaml", kind: "project_note", label: "Project Dependency Lockfile" },
+      { relative_path: "yarn.lock", kind: "project_note", label: "Project Dependency Lockfile" },
+      { relative_path: "Cargo.lock", kind: "project_note", label: "Project Dependency Lockfile" },
+      { relative_path: "tsconfig.json", kind: "project_note", label: "Project TypeScript Configuration" },
+      { relative_path: "jsconfig.json", kind: "project_note", label: "Project JavaScript Configuration" },
+      { relative_path: "pyproject.toml", kind: "project_note", label: "Project Python Configuration" },
+      { relative_path: "requirements.txt", kind: "project_note", label: "Project Python Dependencies" },
+      { relative_path: "Cargo.toml", kind: "project_note", label: "Project Rust Configuration" },
+      { relative_path: "go.mod", kind: "project_note", label: "Project Go Dependencies" },
+      { relative_path: "biome.json", kind: "project_note", label: "Project Lint Configuration" },
+      { relative_path: ".eslintrc.json", kind: "project_note", label: "Project Lint Configuration" },
+      { relative_path: ".prettierrc.json", kind: "project_note", label: "Project Format Configuration" },
     ];
     const discoveredSourceIds = candidates.map(candidate => `project_autodiscovered_${stableDigest({ scope, root, path: candidate.relative_path }).slice(-24)}`);
     let registered = 0, ingested = 0, candidateCount = 0, skipped = 0, partialIngests = 0, failedIngests = 0, retryDeferred = 0, reactivated = 0;
     const sourceRefs: string[] = [];
     for (const candidate of candidates) {
       const locator = join(root, candidate.relative_path);
-      let current = root;
-      let safe = true;
+      let current = root, safe = true, absent = false;
       for (const part of candidate.relative_path.split(sep)) {
         current = join(current, part);
         try {
           const stat = lstatSync(current);
           if (stat.isSymbolicLink() || (current !== locator && !stat.isDirectory())) { safe = false; break; }
-        } catch { safe = false; break; }
+        } catch (error) {
+          absent = (error as NodeJS.ErrnoException).code === "ENOENT";
+          safe = false;
+          break;
+        }
       }
-      if (!safe) { skipped++; continue; }
+      if (!safe) { if (!absent) skipped++; continue; }
       const stat = lstatSync(locator);
-      if (!stat.isFile() && !(candidate.kind === "serena" && stat.isDirectory())) { skipped++; continue; }
+      const directorySource = stat.isDirectory()
+        && (candidate.kind === "serena" || candidate.relative_path === "docs/architecture"
+          || candidate.relative_path === "docs/development" || candidate.relative_path === ".github/workflows");
+      if (!stat.isFile() && !directorySource) { skipped++; continue; }
       const realLocator = this.resolvePath(locator);
       if (!within(root, realLocator)) { skipped++; continue; }
       const sourceId = `project_autodiscovered_${stableDigest({ scope, root, path: candidate.relative_path }).slice(-24)}`;
       const result = this.sourceRegister({ source_id: sourceId, kind: candidate.kind, label: candidate.label, scope_kind: scope.kind, scope_id: scope.id,
-        locator: realLocator, content_digest: stableDigest({ schema: "craft.project-knowledge-source.v1", scope, path: candidate.relative_path }), trust: "bounded", access: "read_only" });
+        locator: realLocator, project_root: root, content_digest: stableDigest({ schema: "craft.project-knowledge-source.v1", scope, path: candidate.relative_path }), trust: "bounded", access: "read_only" });
       sourceRefs.push(sourceId);
       const latestReceipt = result.idempotent === true
         ? this.store.listScoped("knowledge_ingest_receipt", [scope], 1_000, item => item.source_id === sourceId, undefined, { hydrateContent: false })[0]
@@ -154,7 +181,7 @@ export class KnowledgeSourceRegistry {
         if (result.reactivated === true) reactivated++;
         registered++;
         try {
-          const output = this.sourceIngest({ source_id: sourceId, max_files: candidate.kind === "serena" ? 50 : 1 });
+          const output = this.sourceIngest({ source_id: sourceId, max_files: directorySource ? 50 : 1 });
           if (output.status === "completed" || output.status === "partial") {
             ingested++;
             if (output.status === "partial") partialIngests++;
@@ -205,7 +232,11 @@ export class KnowledgeSourceRegistry {
           failureCodes.add(operationErrorCode(fallbackError));
         }
       }
-      if (sourceDisabled) disabled++;
+      if (sourceDisabled) {
+        disabled++;
+        try { this.staleClaimsForUnavailableSource(source, "project_source_path_unavailable"); }
+        catch (error) { failed.add(sourceId); failureCodes.add(operationErrorCode(error)); }
+      }
     }
     return { disabled, failed: failed.size, failure_codes: [...failureCodes].sort() };
   }
@@ -214,7 +245,13 @@ export class KnowledgeSourceRegistry {
     if (typeof source.locator !== "string" || !source.locator) return false;
     try {
       const stat = lstatSync(source.locator);
-      return !stat.isSymbolicLink() && (source.kind === "serena" ? stat.isDirectory() : stat.isFile());
+      if (stat.isSymbolicLink()) return false;
+      if (stat.isFile()) return true;
+      if (!stat.isDirectory()) return false;
+      const projectRoot = projectRootForKnowledgeSource(source);
+      if (!projectRoot) return source.kind === "serena";
+      const relativePath = relative(projectRoot, resolve(source.locator)).split(sep).join("/");
+      return source.kind === "serena" || ["docs/architecture", "docs/development", ".github/workflows"].includes(relativePath);
     } catch { return false; }
   }
 
@@ -235,15 +272,54 @@ export class KnowledgeSourceRegistry {
     }), { ...claim, scope }, "inactive");
   }
 
+  private staleClaimsForUnavailableSource(source: JsonObject, reason: string): void {
+    const sourceId = String(source.id);
+    const claims = this.store.list("knowledge_claim", 100_000,
+      item => item.source_id === sourceId && ["candidate", "reviewed"].includes(String(item.status)), false,
+      { source_ids: [sourceId], document_ids: [] });
+    for (const claim of claims) {
+      const latest = this.store.find("knowledge_claim", String(claim.id));
+      if (!latest || latest.version !== claim.version || !["candidate", "reviewed"].includes(String(latest.status))) continue;
+      const stale = this.store.updateIfVersion("knowledge_claim", String(latest.id), Number(latest.version), {
+        ...payload(latest), status: "stale", revalidation_required: true,
+        stale_source_reason: reason, stale_source_version: Number(source.version),
+      });
+      this.updateStaleScenarioClaim(stale, source);
+    }
+  }
+
   sourceRegister(args: JsonObject): JsonObject {
     const kind = text(args.kind, "kind"); if (!SOURCE_KINDS.has(kind)) throw new Error("Knowledge Source kind is unsupported");
     const trust = text(args.trust ?? "untrusted", "trust"); if (!TRUSTS.has(trust)) throw new Error("Knowledge Source trust is unsupported");
     const access = text(args.access ?? "read_only", "access"); if (!ACCESS.has(access)) throw new Error("Knowledge Source access is unsupported");
-    const sourceScope = parseScope(args); const envelope = scopeEnvelope(args.scope_envelope, sourceScope); const identity = { kind, label: noCredentialAssignment(text(args.label, "label"), "label"), scope: sourceScope, scope_envelope: envelope,
+    const sourceScope = parseScope(args); const envelope = scopeEnvelope(args.scope_envelope, sourceScope);
+    const projectRoot = args.project_root === undefined ? undefined : this.resolvePath(resolve(text(args.project_root, "project_root")));
+    if (projectRoot !== undefined) {
+      if (sourceScope.kind !== "project") throw new Error("Knowledge Source project_root requires project scope");
+      const rootStat = lstatSync(projectRoot);
+      const locator = resolve(text(args.locator, "locator"));
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory() || !within(projectRoot, locator)) throw new Error("Knowledge Source project_root must contain its locator");
+    }
+    const identity = { kind, label: noCredentialAssignment(text(args.label, "label"), "label"), scope: sourceScope, scope_envelope: envelope,
       locator: noCredentialAssignment(text(args.locator, "locator"), "locator"), content_digest: text(args.content_digest, "content_digest"), trust, access };
+    if (projectRoot !== undefined) Object.assign(identity, { project_root: projectRoot });
     const sourceId = String(args.source_id ?? `knowledge_source_${randomUUID().replaceAll("-", "")}`); const existing = this.store.find("knowledge_source", sourceId); const identityDigest = stableDigest(identity);
+    if (sourceScope.kind === "global" && trust === "verified"
+      && trustedOrganizationSourceDigests(process.env.CRAFT_TRUSTED_KNOWLEDGE_SOURCES).get(sourceId) !== identityDigest) {
+      throw new Error("Global verified Knowledge Sources must match the Runtime-pinned source identity allowlist");
+    }
     if (existing) {
       const legacyIdentity = { kind, label: identity.label, scope: sourceScope, locator: identity.locator, content_digest: identity.content_digest, trust, access };
+      const identityWithoutProjectRoot = { ...identity } as JsonObject;
+      delete identityWithoutProjectRoot.project_root;
+      if (projectRoot !== undefined && existing.identity_digest === stableDigest(identityWithoutProjectRoot)) {
+        const recovered = existing.status === "disabled" && existing.automatic_transition === "project_source_path_unavailable"
+          && sourceId.startsWith("project_autodiscovered_") && this.discoveredSourcePathIsUsable({ ...existing, project_root: projectRoot });
+        const migrated = this.store.save("knowledge_source", sourceId, { ...payload(existing), ...identity, identity_digest: identityDigest,
+          ...(recovered ? { status: "active", automatic_transition: null,
+            transition_reason_digest: stableDigest("autodiscovered_project_source_path_recovered") } : {}) });
+        return { source: migrated, idempotent: false, ...(recovered ? { reactivated: true } : {}), migrated_project_root: true };
+      }
       if (existing.identity_digest !== identityDigest && existing.identity_digest !== stableDigest(legacyIdentity)) throw new Error("Knowledge Source idempotency conflict");
       if (existing.status === "disabled" && existing.automatic_transition === "project_source_path_unavailable"
         && sourceId.startsWith("project_autodiscovered_") && this.discoveredSourcePathIsUsable(existing)) {
@@ -299,6 +375,9 @@ export class KnowledgeSourceRegistry {
     const id = `knowledge_ingest_${randomUUID().replaceAll("-", "")}`;
     try {
       const result = this.ingest(args);
+      if (result.status === "unavailable" && result.reason === "source_root_unavailable") {
+        this.staleClaimsForUnavailableSource(source, "source_root_unavailable");
+      }
       const receipt = this.store.create("knowledge_ingest_receipt", id, { source_id: source.id, source_version: source.version, status: result.status, reason: result.reason ?? null,
         processed_files: result.processed_files ?? 0, total_files: result.total_files ?? null, has_more: result.has_more ?? false,
         invalidated_documents: result.invalidated_documents ?? 0, unscoped_claims_skipped: result.unscoped_claims_skipped ?? 0 });

@@ -114,9 +114,9 @@ test("context feedback weights count unique helpful receipts and pending correct
     })) : corrections;
     return predicate ? rows.filter(row => predicate(row)) : rows;
   };
-  bound.find = (kind: string, id: string) => kind === "evidence"
+  bound.find = (kind: string, id: string): Row => kind === "evidence"
     ? { id, version: 1, record_origin: "program", source_type: "program", confidence: "confirmed", metadata: { context_receipt_id: id === "e1" ? "r1" : "r2", verdict: "passed" } }
-    : null;
+    : {};
   const weights = contextFeedbackWeights(bound as never, "m", ["a", "b", "c"]);
   assert.equal(weights.size, 3);
   assert.equal(weights.get("a")!.positive, 2);
@@ -127,8 +127,7 @@ test("context feedback weights count unique helpful receipts and pending correct
   assert.equal(weights.get("c")!.negative, 0);
   assert.equal(weights.get("a")!.penalty, 0.8);
   assert.equal(weights.get("c")!.penalty, 1);
-  assert.equal(contextFeedbackWeights(store as never, "m", []).size, 0);
-  void correctRows;
+  assert.equal(contextFeedbackWeights(bound as never, "m", []).size, 0);
 });
 
 test("MemorySignalsKernel delegates to the pure signals", () => {

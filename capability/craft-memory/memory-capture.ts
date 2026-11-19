@@ -6,6 +6,7 @@ import { mapLegacyKind, validateConcept } from 'craft-common-ontology/validation
 import type { MemoryGovernanceKernel } from "./memory-governance.ts";
 import { SharedPromotionEvidenceError } from "./memory-ledger.ts";
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
+import { globalPromotionContentDecision } from "./global-promotion-gate.ts";
 
 /** The host supplies Evidence/source ports; this package never imports a harness. */
 export class MemoryCapture {
@@ -177,10 +178,27 @@ export class MemoryCapture {
         const globalCandidateId = `memory_candidate_global_${digestJson({ contentDigest, kind: candidate.kind, topic: candidate.topic ?? "", supportRefs }).slice(-32)}`;
         const globalValidUntil = projectMemories.map(row => typeof row.valid_until === "string" ? row.valid_until : null)
           .filter((value): value is string => value !== null).sort((left, right) => Date.parse(left) - Date.parse(right))[0] ?? null;
-        const promoted = this.proposePromotion({ candidate_id: globalCandidateId, source_id: candidate.source_id, kind: candidate.kind,
+        const contentDecision = globalPromotionContentDecision(String(candidate.content ?? ""), candidate.sensitivity);
+        if (!contentDecision.eligible) {
+          results.push({ tier: "global", repetition_count: projects.size, status: "rejected", auto_committed: false,
+            reason_code: contentDecision.reason_code, reason: contentDecision.reason_code === "deidentification_required"
+              ? "Rewrite identifiable details before cross-project promotion."
+              : "Memory sensitivity is not eligible for cross-project promotion." });
+          return results;
+        }
+        const globalArgs = { candidate_id: globalCandidateId, source_id: candidate.source_id, kind: candidate.kind,
           scope_kind: "global", scope_id: "global", content: candidate.content, topic: candidate.topic || undefined,
-          sensitivity: candidate.sensitivity, confidence: "bounded", evidence_ids: globalEvidenceIds, proposed_by: "automatic-memory-promotion", valid_until: globalValidUntil,
-          promotion_support_refs: supportRefs });
+          sensitivity: candidate.sensitivity, confidence: "bounded", evidence_ids: globalEvidenceIds, proposed_by: "automatic-memory-promotion",
+          valid_until: globalValidUntil, promotion_support_refs: supportRefs };
+        try { this.memory.ledger.validatePromotionSupport(globalArgs); }
+        catch (error) {
+          const sharedEvidence = error instanceof SharedPromotionEvidenceError;
+          results.push({ tier: "global", repetition_count: projects.size, status: "rejected", auto_committed: false,
+            reason_code: sharedEvidence ? "shared_evidence" : "independent_project_evidence_unverified",
+            reason: sharedEvidence ? "Project evidence is shared; independent evidence is required." : "Current independent project evidence could not be verified." });
+          return results;
+        }
+        const promoted = this.proposePromotion(globalArgs);
         const governedPromotion = this.resolveRepeatedConflict(promoted, globalEvidenceIds);
         results.push({ tier: "global", repetition_count: projects.size, ...governedPromotion,
           ...(governedPromotion.auto_committed === true ? { memory_file: this.memory.ledger.files.sync({ kind: "global", id: "global" }) } : {}) });

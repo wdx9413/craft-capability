@@ -20,6 +20,8 @@ import { ProcedurePlanner, validateProcedureComposition } from "./procedure-comp
 import { scopeEnvelope } from 'craft-common-base/scope-policy';
 import { validateConcept } from 'craft-common-ontology/validation';
 import { projectExperienceDirectory } from "./project-experience-directory.ts";
+import { EvaluationContractKernel } from "craft-common-log/evaluation-contract";
+import { procedureEvaluationBinding } from "./procedure-evaluation-binding.ts";
 
 const STAGES = ["shadow", "held_out", "signoff", "canary"] as const;
 type Stage = typeof STAGES[number];
@@ -51,7 +53,17 @@ function scopeRef(value: string): { kind: string; id: string } {
 export class ProcedureStore {
   readonly store: CraftStore;
   readonly definitions: ProcedureDefinitionStore;
-  constructor(store: CraftStore) { this.store = store; this.definitions = new ProcedureDefinitionStore(store); }
+  private evaluationVerifier: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject };
+  constructor(store: CraftStore) {
+    this.store = store; this.definitions = new ProcedureDefinitionStore(store);
+    this.evaluationVerifier = new EvaluationContractKernel(store);
+  }
+
+  /** Use the Runtime's immutable evaluator trust registry for every promotion check. */
+  setEvaluationVerifier(verifier: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject }): void {
+    if (!verifier || typeof verifier.verifyTaskEffectEvaluation !== "function") throw new Error("Procedure promotion requires the verified task-effect Evaluation Contract service");
+    this.evaluationVerifier = verifier;
+  }
 
   /** Save a sanitized, project-local Runbook candidate from one verified Host observation. */
   runbookCapture(args: JsonObject): JsonObject {
@@ -215,7 +227,7 @@ export class ProcedureStore {
         definition_digest: definitionRef?.digest ?? "",
         revoked_by: "",
       } });
-    const next = { ...identity, proposal_id: proposal.id, proposal_version: proposal.version, lifecycle: "candidate", completed_gates: [],
+    const next = { ...identity, proposal_id: proposal.id, proposal_version: proposal.version, candidate_version: version, lifecycle: "candidate", completed_gates: [],
       content_ref: ref, content_digest: ref.digest, definition_ref: definitionRef, definition_digest: definitionRef?.digest ?? null,
       // Concept tag is non-identity metadata: the taxonomy already validated the
       // title as a procedure, so downstream context/relations can see it.
@@ -253,7 +265,16 @@ export class ProcedureStore {
     const completed = !invalidated && Array.isArray(procedure.completed_gates) ? procedure.completed_gates.map(String) : [];
     const evidenceIds = strings(args.evidence_ids, "evidence_ids", 1); for (const evidenceId of evidenceIds) this.assertEvidence(evidenceId);
     const passed = args.passed === true;
-    const identity = { procedure_id: procedure.id, procedure_version: procedure.version, stage, evidence_ids: evidenceIds, passed, verdict: text(args.verdict ?? (passed ? "passed" : "failed"), "verdict") };
+    let qualification: JsonObject | undefined;
+    if (passed && stage === "held_out") {
+      qualification = this.verifyProcedureEvaluation(procedure, text(args.evaluation_contract_id, "evaluation_contract_id"), text(args.evaluation_id, "evaluation_id"));
+    } else if (passed && (stage === "signoff" || stage === "canary")) {
+      qualification = this.verifyProcedureEvaluation(procedure,
+        text(args.evaluation_contract_id ?? procedure.evaluation_contract_id, "evaluation_contract_id"),
+        text(args.evaluation_id ?? procedure.evaluation_id, "evaluation_id"), procedure);
+    }
+    const identity = { procedure_id: procedure.id, procedure_version: procedure.version, stage, evidence_ids: evidenceIds, passed,
+      ...(qualification ? { qualification } : {}), verdict: text(args.verdict ?? (passed ? "passed" : "failed"), "verdict") };
     // A retry binds the request and immutable asset, not the version the first
     // successful transition itself incremented. Replays never reapply a gate.
     const requestDigest = stableDigest({ ...identity, procedure_version: null, asset_digest: procedure.identity_digest });
@@ -284,10 +305,21 @@ export class ProcedureStore {
     // stage invalidates downstream passes even when the new result is positive.
     const next = passed ? [...STAGES.slice(0, expected), stage] : [];
     const lifecycle = !passed ? (stage === "canary" ? "rolled_back" : "rejected") : stage === "canary" ? "routeable" : "candidate";
-    const saved = this.store.save("experience_procedure", String(procedure.id), { ...payload(procedure), completed_gates: next, lifecycle, routeable: lifecycle === "routeable", rollback_gate_id: lifecycle === "rolled_back" ? gate.id : null });
+    const resetQualification = !passed || stage === "shadow";
+    const saved = this.store.save("experience_procedure", String(procedure.id), { ...payload(procedure), ...(qualification ?? {}),
+      ...(resetQualification ? { evaluation_contract_id: null, evaluation_contract_digest: null, evaluation_id: null, candidate_ref: null } : {}),
+      completed_gates: next, lifecycle, routeable: lifecycle === "routeable", rollback_gate_id: lifecycle === "rolled_back" ? gate.id : null });
     updateProcedureRelease(this.store, saved);
     this.refreshMarkdown(saved);
     return { gate, procedure: saved, idempotent: false };
+  }
+
+  private verifyProcedureEvaluation(procedure: JsonObject, contractId: string, evaluationId: string, prior?: JsonObject): JsonObject {
+    const contract = this.store.get("evaluation_contract", contractId);
+    const digest = String(procedure.definition_digest ?? procedure.content_digest ?? procedure.identity_digest ?? "");
+    const candidateRef = { kind: "experience_procedure", id: String(procedure.id), version: Number(procedure.candidate_version ?? procedure.version), digest };
+    const evaluation = this.evaluationVerifier.verifyTaskEffectEvaluation({ contract_id: contractId, evaluation_id: evaluationId, candidate_ref: candidateRef });
+    return procedureEvaluationBinding({ procedure, contract, evaluation: evaluation as never, evaluationId, ...(prior ? { prior } : {}) });
   }
 
   plan(args: JsonObject): JsonObject { return new ProcedurePlanner(this.store).plan(args); }

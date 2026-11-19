@@ -9,10 +9,14 @@ minimumReleaseAgeExclude:
   - '@craft/capability-codebase@0.20.5'
   - '@craft/capability-datasec@0.1.7'
   - '@craft/capability-experience@0.20.5'
+  - '@craft/capability-experience@0.20.10'
   - '@craft/craft-notes@0.20.7'
   - '@craft/capability-knowledge@0.20.5'
   - '@craft/capability-memory@0.20.5'
+  - '@craft/capability-memory@0.20.6'
   - craft-common-base@0.20.4
   - craft-common-log@0.20.4
+  - craft-common-log@0.20.5
   - craft-common-ontology@0.20.5
+  - craft-common-ontology@0.20.6
   - craft-common-store-local@0.20.4

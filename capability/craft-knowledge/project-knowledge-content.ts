@@ -14,6 +14,20 @@ export interface ProjectKnowledgeDirectoryOptions {
 /** Infer a project root only from a trusted Source locator with a known project layout. */
 export function projectRootForKnowledgeSource(source: JsonObject): string | null {
   if (typeof source.locator !== "string") return null;
+  if (typeof source.project_root === "string") {
+    const root = resolve(source.project_root);
+    const locator = resolve(source.locator);
+    try {
+      const rootStat = lstatSync(root);
+      const locatorStat = lstatSync(locator);
+      const rootReal = realpathSync(root);
+      const locatorReal = realpathSync(locator);
+      const rootRelative = relative(rootReal, locatorReal);
+      if (rootStat.isSymbolicLink() || !rootStat.isDirectory() || locatorStat.isSymbolicLink()
+        || rootRelative === ".." || rootRelative.startsWith(`..${sep}`) || isAbsolute(rootRelative)) return null;
+      return rootReal;
+    } catch { return null; }
+  }
   if (source.kind === "readme" || source.kind === "project_note") {
     const path = resolve(source.locator);
     try {

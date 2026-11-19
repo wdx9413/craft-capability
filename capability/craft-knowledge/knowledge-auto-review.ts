@@ -16,6 +16,7 @@ import { updateKnowledgeScenarioClaim } from '@craft/capability-knowledge/scenar
 import { scopeFromKey } from 'craft-common-base/scope-policy';
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";
 import { assessKnowledgeEvaluationProvenance, knowledgeClaimPromotionProofVerified, knowledgeEvaluationAdjudicationVerified, knowledgeEvaluationEvidence, knowledgeEvaluationSourceMatches, knowledgeTaskEffectEvidenceVerified } from "@craft/capability-knowledge/knowledge-evaluation-provenance";
+import { trustedOrganizationSourceDigests } from "./organization-source-trust.ts";
 
 type Verdict = "eligible" | "revalidation_required" | "rejected" | "already_reviewed";
 type Confidence = "bounded" | "confirmed";
@@ -347,6 +348,16 @@ export class KnowledgeAutoReviewKernel {
       if (!sourceId) reasons.push("source_missing");
       else if (!source) reasons.push("source_not_registered");
       else if (source.status !== "active" || source.trust === "untrusted") reasons.push("source_not_trusted_active");
+      if (scopeFromKey(String(claim.scope)).kind === "global") {
+        const sourceScope = source?.scope && typeof source.scope === "object" && !Array.isArray(source.scope)
+          ? source.scope as JsonObject : null;
+        if (!source || sourceScope?.kind !== "global" || sourceScope.id !== "global") reasons.push("global_source_scope_required");
+        if (source?.trust !== "verified") reasons.push("global_source_must_be_verified");
+        const trustedIdentity = trustedOrganizationSourceDigests(process.env.CRAFT_TRUSTED_KNOWLEDGE_SOURCES).get(String(source?.id));
+        if (source && trustedIdentity !== source.identity_digest) {
+          reasons.push("global_source_not_in_trusted_allowlist");
+        }
+      }
       if (!credibleEvidence.length) reasons.push("credible_evidence_missing");
       const effectivenessRun = this.independentEffectivenessRun(claim);
       if (!effectivenessRun) reasons.push("independent_effectiveness_evaluation_required");

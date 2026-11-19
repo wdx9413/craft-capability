@@ -6,3 +6,5 @@ export { OfficeAdapter } from "./office-adapter.ts";
 export { CreationAdapter } from "./creation-adapter.ts";
 export { TravelAdapter } from "./travel-adapter.ts";
 export { captureUserStatedRunbook, extractUserStatedOperatingSteps } from "./runbook-candidate.ts";
+export { buildDomainEvaluationSummary, DOMAIN_CASES, OFFICE_EVALUATION_CONTRACT, prepareDomainAdapterCandidate } from "./domain-adapter-contract.ts";
+export type { DomainAdapterCandidate, DomainAdapterCandidateInput } from "./domain-adapter-contract.ts";

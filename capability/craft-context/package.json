@@ -1,6 +1,6 @@
 {
   "name": "@craft/capability-context",
-  "version": "0.20.5",
+  "version": "0.20.8",
   "description": "Craft Context capability: scenario-agnostic self-evolution state and orchestration over Knowledge, Memory, Experience and Notes",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,9 +21,10 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@craft/capability-knowledge": "0.20.5",
+    "@craft/capability-knowledge": "0.20.7",
     "craft-common-base": "0.20.4",
-    "craft-common-ontology": "0.20.5",
+    "craft-common-log": "0.20.12",
+    "craft-common-ontology": "0.20.7",
     "craft-common-store-local": "0.20.4"
   },
   "engines": {

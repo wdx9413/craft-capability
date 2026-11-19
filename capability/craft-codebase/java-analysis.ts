@@ -18,7 +18,10 @@ export type JavaControlFlowResult = { result?: JsonObject; diagnostic?: JsonObje
 /** A non-file module URL has no filesystem location; that must not be a crash. */
 function moduleAnalyzerCandidate(moduleUrl: string | null, fileName: string): string[] {
   if (!moduleUrl) return [];
-  try { return [join(dirname(fileURLToPath(moduleUrl)), "analyzers", fileName)]; }
+  try {
+    const moduleDirectory = dirname(fileURLToPath(moduleUrl));
+    return [join(moduleDirectory, "analyzers", fileName), join(dirname(moduleDirectory), "analyzers", fileName)];
+  }
   catch { return []; }
 }
 

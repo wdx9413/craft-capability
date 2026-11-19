@@ -2,13 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { KnowledgeRelationKernel } from '@craft/capability-knowledge/knowledge-relation';
 import { knowledgeLineageImpact } from '@craft/capability-knowledge/knowledge-lineage-impact';
+import { DOMAIN_ADAPTERS, buildDomainEvaluationSummary, prepareDomainAdapterCandidate } from './domain-adapter-contract.ts';
 
 export const RESEARCH_LAYERS = ["literature_fact", "experiment_observation", "interpretation"] as const;
 export type ResearchLayer = (typeof RESEARCH_LAYERS)[number];
 export const RESEARCH_RELATIONS = ["derives_from", "supports", "contradicts", "supersedes"] as const;
 export type ResearchRelation = (typeof RESEARCH_RELATIONS)[number];
 
-export const DOMAIN_ADAPTER_NAMES = ["coding", "office", "travel", "creation", "research"] as const;
+export const DOMAIN_ADAPTER_NAMES = DOMAIN_ADAPTERS;
 export type DomainAdapterName = (typeof DOMAIN_ADAPTER_NAMES)[number];
 export type DomainOrGeneral = DomainAdapterName | "general";
 
@@ -87,13 +88,10 @@ export class SelfEvolutionKernel {
   }
 
   registerAdapter(args: JsonObject): JsonObject {
-    const name = text(args.name) as DomainAdapterName;
-    if (!(DOMAIN_ADAPTER_NAMES as readonly string[]).includes(name)) throw new Error("unsupported domain adapter");
-    const id = `domain_adapter_${name}_candidate_${randomUUID().slice(0, 8)}`;
-    const record = { name, version: text(args.version) || "v0", status: "candidate",
-      extraction_patterns: stringArray(args.extraction_patterns), value_threshold: Number(args.value_threshold ?? 2),
-      evidence_types: stringArray(args.evidence_types), eval_case_ids: stringArray(args.eval_case_ids) };
-    this.store.create("domain_adapter", id, { ...record, digest: digest(record) });
+    const candidate = prepareDomainAdapterCandidate({ ...args, name: args.name, version: text(args.version) || "v1" });
+    const id = `domain_adapter_${candidate.name}_candidate_${randomUUID().slice(0, 8)}`;
+    const record = { ...candidate, digest: digest(candidate) };
+    this.store.create("domain_adapter", id, record);
     return this.store.get("domain_adapter", id);
   }
 
@@ -349,13 +347,6 @@ export class SelfEvolutionKernel {
   }
 
   evalSummary(): JsonObject {
-    const domains = [...DOMAIN_ADAPTER_NAMES, "general"].map((name) => ({
-      domain: name,
-      cases: (name === "general"
-        ? ["unknown_scenario", "product_document", "technical_design", "web_system_operation"]
-        : DOMAIN_ADAPTER_NAMES.includes(name as DomainAdapterName) ? ["write", "recall", "apply", "forget", "scope_leak"] : [])
-        .map((caseId) => ({ case_id: `${name}.${caseId}`, observed: false })),
-    }));
-    return { schema: "craft.general-evolution-eval.v1", domains, quotable: false };
+    return buildDomainEvaluationSummary() as unknown as JsonObject;
   }
 }

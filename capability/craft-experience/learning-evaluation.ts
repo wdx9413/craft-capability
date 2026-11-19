@@ -50,6 +50,10 @@ export class ExperienceLearningEvaluation {
     const procedure = this.store.get("experience_procedure", String(dispatch.procedure_id), Number(dispatch.procedure_version));
     if (retiredForEvaluation(this.store, procedure)) throw new Error("Experience scenario is retired; evaluation cannot execute");
     if (procedure.definition_digest !== dispatch.definition_digest) throw new Error("Experience evaluation candidate definition drifted");
+    // A local read-only assertion is useful for Shadow/Canary regression checks,
+    // but it is not an independent paired task-effect evaluation. The trusted
+    // evaluator reports this stage through craft_experience_learning_evaluation_result.
+    if (dispatch.stage === "held_out") return { dispatch, status: "awaiting_adapter", reason: "trusted_task_effect_evaluation_required" };
     if (procedure.procedure_kind !== "workflow" || !procedureDefinitionRef(procedure.definition_ref)) return { dispatch, status: "awaiting_adapter", reason: "automatic_evaluator_supports_read_only_workflows_only" };
     const definition = new ProcedureDefinitionStore(this.store).read(procedure.definition_ref);
     if (stableDigest(definition) !== procedure.definition_digest) throw new Error("Experience evaluation definition digest does not match the candidate");
@@ -191,7 +195,9 @@ export class ExperienceLearningEvaluation {
     const dispatch = this.store.get("experience_evaluation_dispatch", id);
     if (dispatch.status !== "awaiting_adapter") {
       const replayEvidence = Array.isArray(args.evidence_ids) ? [...new Set(args.evidence_ids.map(value => text(value, "evidence_ids")))].sort() : [];
-      if (!["passed", "failed"].includes(String(dispatch.status)) || stableDigest(replayEvidence) !== stableDigest(dispatch.evidence_ids)) throw new Error("Experience evaluation dispatch is already resolved with different evidence");
+      const replayBinding = { evidence_ids: replayEvidence, evaluation_contract_id: args.evaluation_contract_id ?? null, evaluation_id: args.evaluation_id ?? null };
+      const savedBinding = { evidence_ids: dispatch.evidence_ids, evaluation_contract_id: dispatch.evaluation_contract_id ?? null, evaluation_id: dispatch.evaluation_id ?? null };
+      if (!["passed", "failed"].includes(String(dispatch.status)) || stableDigest(replayBinding) !== stableDigest(savedBinding)) throw new Error("Experience evaluation dispatch is already resolved with different evidence");
       const procedure = this.store.get("experience_procedure", String(dispatch.procedure_id));
       const recordedGate = this.store.get("experience_procedure_gate", String(dispatch.gate_id));
       return { dispatch, gate: recordedGate, procedure, next_dispatch: null,
@@ -220,9 +226,15 @@ export class ExperienceLearningEvaluation {
       if ((current?.version ?? null) !== (dispatch.baseline_version ?? null)) throw new Error("Canary baseline changed after this dispatch was created");
     }
     const passed = evidenceIds.every(id => (this.store.get("evidence", id).metadata as JsonObject).status === "passed");
+    const evaluationContractId = typeof args.evaluation_contract_id === "string" ? text(args.evaluation_contract_id, "evaluation_contract_id") : undefined;
+    const evaluationId = typeof args.evaluation_id === "string" ? text(args.evaluation_id, "evaluation_id") : undefined;
+    if (dispatch.stage === "held_out" && passed && (!evaluationContractId || !evaluationId)) throw new Error("Held-out Procedure promotion requires a trusted task-effect Evaluation Contract result");
     const gateResult = gate({ procedure_id: procedure.id, stage: dispatch.stage, passed, verdict: passed ? "adapter_evaluated_pass" : "adapter_evaluated_fail",
-      evidence_ids: evidenceIds, expected_version: procedure.version, gate_id: `experience_auto_gate_${stableDigest({ dispatch: id, evidenceIds, passed }).slice(-20)}` });
-    const savedDispatch = this.store.save("experience_evaluation_dispatch", id, { ...payload(dispatch), status: passed ? "passed" : "failed", evidence_ids: evidenceIds, gate_id: (gateResult.gate as JsonObject).id });
+      evidence_ids: evidenceIds, expected_version: procedure.version,
+      ...(evaluationContractId ? { evaluation_contract_id: evaluationContractId } : {}), ...(evaluationId ? { evaluation_id: evaluationId } : {}),
+      gate_id: `experience_auto_gate_${stableDigest({ dispatch: id, evidenceIds, passed, evaluationContractId: evaluationContractId ?? null, evaluationId: evaluationId ?? null }).slice(-20)}` });
+    const savedDispatch = this.store.save("experience_evaluation_dispatch", id, { ...payload(dispatch), status: passed ? "passed" : "failed", evidence_ids: evidenceIds,
+      evaluation_contract_id: evaluationContractId ?? null, evaluation_id: evaluationId ?? null, gate_id: (gateResult.gate as JsonObject).id });
     const next = passed && dispatch.stage !== "canary" ? this.dispatch({ procedure_id: procedure.id }) : null;
     const updated = gateResult.procedure as JsonObject;
     this.store.appendEvent(`experience:${procedure.id}`, "experience.evaluation_result_recorded", { dispatch_id: id, gate_id: (gateResult.gate as JsonObject).id, stage: dispatch.stage, status: passed ? "passed" : "failed", evidence_ids: evidenceIds, trace_id: dispatch.trace_id });

@@ -96,6 +96,15 @@ export class KnowledgeClaimGovernance {
     if (coarseScenarioDefinition && !coarseScenarioKey) throw new Error("coarse scenario definition requires coarse_scenario_key");
     if (coarseScenarioKey && !scenarioKey) throw new Error("coarse_scenario_key requires scenario_key");
     const scenarioScope = scopeFromKey(scope);
+    // A project Source can only support a claim in that project. A broader
+    // global claim needs an independently registered global Source and must
+    // still pass the global promotion allowlist and target-scope evaluation.
+    if (scenarioScope.kind === "global") {
+      const source = this.store.find("knowledge_source", sourceId);
+      const sourceScope = source?.scope && typeof source.scope === "object" && !Array.isArray(source.scope)
+        ? source.scope as JsonObject : null;
+      if (sourceScope?.kind === "project") throw new Error("Project Knowledge Source cannot create a global Claim");
+    }
     if ((scenarioKey || coarseScenarioKey) && scenarioScope.kind !== "project" && scenarioScope.kind !== "global") {
       throw new Error("Knowledge scenario classification requires project or global scope");
     }
