@@ -1,0 +1,37 @@
+{
+  "name": "@craft/capability-context",
+  "version": "0.20.5",
+  "description": "Craft Context capability: scenario-agnostic self-evolution state and orchestration over Knowledge, Memory, Experience and Notes",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./capability": {
+      "types": "./dist/capability.d.ts",
+      "default": "./dist/capability.js"
+    },
+    "./self-evolution": {
+      "types": "./dist/self-evolution.d.ts",
+      "default": "./dist/self-evolution.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@craft/capability-knowledge": "0.20.5",
+    "craft-common-base": "0.20.4",
+    "craft-common-ontology": "0.20.5",
+    "craft-common-store-local": "0.20.4"
+  },
+  "engines": {
+    "node": ">=23"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "license": "MIT"
+}

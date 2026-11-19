@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --experimental-strip-types --test ../../tests/craft-datasec.test.ts"
+    "test": "node --experimental-strip-types --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-functions=100 --test-coverage-branches=100 --test-coverage-include=rules.ts tests/rules.test.ts"
   },
   "engines": {
     "node": ">=23"

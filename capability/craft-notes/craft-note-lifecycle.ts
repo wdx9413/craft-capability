@@ -43,6 +43,11 @@ function noteRecord(value: JsonObject): CraftNoteRecord {
     ...(value.sensitivity ? { sensitivity: String(value.sensitivity) } : {}), ...(value.freshness ? { freshness: value.freshness as CraftNoteRecord["freshness"] } : {}) };
 }
 
+/** Seed text for a place without a description: its last path segment, or the path itself for a root. */
+export function noteSeedText(path: string): string {
+  return path.split(/[\\/]/u).filter(Boolean).at(-1) ?? path;
+}
+
 /** Unified Notes lifecycle. File metadata is always supplied by the caller; this class never opens a path. */
 export class CraftNotesRegistry {
   readonly store: CraftStore;
@@ -59,7 +64,6 @@ export class CraftNotesRegistry {
     const id = deviceId(args.id ?? args.device_id);
     const noteText = this.#noteText(args.note ?? args.description, "note");
     const existing = this.store.find("device", id);
-    if (existing?.status === "disabled" && args.status === "active" && !noteText) throw new Error("device reactivation requires a Device Note");
     const now = new Date().toISOString();
     const device = { ...(existing ?? {}), ...args, id, device_note: noteText,
       status: args.status === "disabled" || existing?.status === "disabled" && args.status !== "active" ? "disabled" : "active", updated_at: now };
@@ -118,7 +122,7 @@ export class CraftNotesRegistry {
     const sessions = new Set(events.map(r => String(r.session_id)));
     const tasks = new Set(events.map(r => String(r.task_id)));
     const eligible = pinned || (tasks.size >= NOTE_USAGE_THRESHOLD && sessions.size >= NOTE_INDEPENDENT_SESSION_THRESHOLD);
-    const candidateText = this.#noteText(noteText ?? previous?.text ?? path.split(/[\\/]/u).filter(Boolean).at(-1) ?? path, "note");
+    const candidateText = this.#noteText(noteText ?? previous?.text ?? noteSeedText(path), "note");
     const candidate = previous?.status === "confirmed" ? previous : { ...(previous ?? {}), id: previous?.id ?? (typeof args.id === "string" ? args.id : `note_${randomUUID()}`), subject_type: kind,
       subject_key: key, device_id: device, ...(args.project_id === undefined ? {} : { project_id: String(args.project_id) }),
       text: candidateText,

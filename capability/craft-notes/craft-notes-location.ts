@@ -19,7 +19,7 @@
  * Device metadata (`device`, health, status) lives alongside places. A disabled
  * device stops being recallable without losing its audit trail or its places.
  */
-import { isAbsolute, resolve, win32 } from "node:path";
+import { isAbsolute, parse, resolve, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
 import { type CraftStore, type JsonObject } from 'craft-common-store-local/store';
 import { CraftNotesRegistry, type CraftNoteTextValidator } from "./craft-note-lifecycle.ts";
@@ -110,18 +110,6 @@ function normalizeDeviceKind(value: unknown): DeviceKind {
   return value as DeviceKind;
 }
 
-function normalizeTag(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error("tag must be a non-empty string");
-  const trimmed = value.trim();
-  if (trimmed.length > 64) throw new Error("tag must be 64 characters or fewer");
-  return trimmed;
-}
-
-function normalizeTags(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map((item) => normalizeTag(item)))];
-}
-
 function normalizeHealth(value: unknown): DeviceRecord["health"] {
   if (value === undefined || value === null) return "healthy";
   if (typeof value !== "string" || !new Set(["healthy", "degraded", "offline"]).has(value)) {
@@ -178,7 +166,7 @@ function toRecord(payload: JsonObject): CraftNotesLocationRecord {
     path: String(payload.path),
     description: String(payload.description),
     hostKind: payload.host_kind === "cloud" ? "cloud" : "local",
-    repoIdentity: normalizeRepoIdentity(payload.repo_identity ?? null),
+    repoIdentity: readRepoIdentity(payload.repo_identity),
     useCount: Number(payload.use_count ?? 0),
     status: payload.status === "promoted" ? "promoted" : payload.status === "revoked" ? "revoked" : "observed",
     createdAt: String(payload.created_at),
@@ -193,9 +181,8 @@ function toRecord(payload: JsonObject): CraftNotesLocationRecord {
 
 function termMatch(haystack: string, needle: string): boolean {
   // A description resolves to a path when every whitespace-separated term in the
-  // query appears in the stored description. Empty queries match nothing.
+  // query appears in the stored description. Callers reject empty queries first.
   const terms = needle.toLowerCase().split(/\s+/u).filter(Boolean);
-  if (terms.length === 0) return false;
   const lower = haystack.toLowerCase();
   return terms.every((term) => lower.includes(term));
 }
@@ -384,7 +371,7 @@ export class CraftNotesLocationRegistry {
     // Seeding needs a description; callers without one are recorded with the
     // directory's own name so the entry is still findable and reviewable.
     const description = args.description === undefined || args.description === null
-      ? (path.split(/[\\/]/u).filter(Boolean).pop() ?? path)
+      ? notePathSeed(path)
       : normalizeDescription(args.description);
     const id = String(args.id ?? `fdd_${randomUUID()}`);
     const payload = { id, device_id: deviceId, device_kind: deviceKind, path, description, host_kind: hostKind,
@@ -475,7 +462,7 @@ export class CraftNotesLocationRegistry {
           && termMatch(String(item.description), description)
           && (deviceId === null ? true : String(item.device_id ?? "local") === deviceId)
           && (repoIdentity === null ? true : sameRepo(item.repo_identity, repoIdentity))
-          && (String(item.status) !== "revoked" ? deviceActive(this.store, String(item.device_id ?? "local")) : true))
+          && deviceActive(this.store, String(item.device_id ?? "local")))
         .map(toRecord)
         .sort((a, b) => b.useCount - a.useCount);
       return { kind: "by_description", query: description, results: matches.slice(0, limit) };
@@ -533,13 +520,24 @@ function normalizeRepoIdentity(value: unknown): RepoIdentity | null {
   // A stored record may carry an empty placeholder; treat it as "no repository"
   // instead of failing to read back an otherwise valid place.
   if (item.remote_url === undefined || item.remote_url === null || item.remote_url === "") return null;
-  const remoteUrl = String(item.remote_url ?? "").trim();
+  const remoteUrl = String(item.remote_url).trim();
   if (!remoteUrl) throw new Error("repo_identity.remote_url must be a non-empty string");
   if (/\/\/[^/@\s]+:[^/@\s]+@/u.test(remoteUrl)) throw new Error("repo_identity.remote_url must not contain credentials");
   if (remoteUrl.length > 500) throw new Error("repo_identity.remote_url must be 500 characters or fewer");
   const commit = item.commit === undefined || item.commit === null ? null : String(item.commit).trim();
   if (commit !== null && !/^[0-9a-f]{7,64}$/iu.test(commit)) throw new Error("repo_identity.commit must be a hexadecimal object id");
   return { remoteUrl, commit };
+}
+
+/** Stored rows are untrusted input: a malformed repo identity must not break listing. */
+function readRepoIdentity(value: unknown): RepoIdentity | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  try {
+    return normalizeRepoIdentity(value);
+  } catch {
+    return null;
+  }
 }
 
 function normalizePath(value: unknown): string {
@@ -561,6 +559,15 @@ function normalizeDescription(value: unknown): string {
   const trimmed = value.trim().replace(/\s+/gu, " ");
   if (trimmed.length > 500) throw new Error("description must be 500 characters or fewer");
   return trimmed;
+}
+
+/**
+ * Seed text for a place without a description: its last path segment, or the
+ * path itself when the path is a filesystem root (there is no segment then).
+ */
+export function notePathSeed(path: string): string {
+  if (parse(path).root === path) return path;
+  return path.split(/[\\/]/u).filter(Boolean).at(-1)!;
 }
 
 function normalizeHostKind(value: unknown): "local" | "cloud" {
