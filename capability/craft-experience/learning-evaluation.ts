@@ -1,5 +1,5 @@
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
-import { activeProcedure, belongsToRetiredScenario } from "./procedure-release.ts";
+import { activeProcedure, belongsToRetiredScenario, programMemoryProcedureVisible } from "./procedure-release.ts";
 import { stableDigest, payload } from 'craft-common-base/digest';
 import { lstatSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -38,7 +38,12 @@ export class ExperienceLearningEvaluation {
   listPending(args: JsonObject = {}): JsonObject {
     const limit = args.limit === undefined ? 100 : Number(args.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) throw new Error("limit must be an integer between 1 and 1000");
-    const dispatches = this.store.list("experience_evaluation_dispatch", limit, item => item.status === "awaiting_adapter");
+    const dispatches = this.store.list("experience_evaluation_dispatch", limit, item => {
+      if (item.status !== "awaiting_adapter") return false;
+      const procedure = typeof item.procedure_id === "string"
+        ? this.store.find("experience_procedure", item.procedure_id, Number(item.procedure_version), false) : null;
+      return !procedure || programMemoryProcedureVisible(this.store, procedure, args.program_memory_scope_id);
+    });
     return { dispatches, count: dispatches.length };
   }
 

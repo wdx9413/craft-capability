@@ -14,7 +14,7 @@ import { join, resolve } from "node:path";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { stableDigest, payload } from 'craft-common-base/digest';
 import { ProcedureDefinitionStore, procedureDefinitionRef, type ProcedureDefinition, type ProcedureKind } from "./procedure-definition.ts";
-import { activeProcedure, belongsToRetiredScenario, preserveProcedureRelease, updateProcedureRelease, selectedProcedure } from "./procedure-release.ts";
+import { activeProcedure, belongsToRetiredScenario, preserveProcedureRelease, programMemoryProcedureVisible, updateProcedureRelease, selectedProcedure } from "./procedure-release.ts";
 import { syncGraphVersionManifest } from "./graph-version-manifest.ts";
 import { ProcedurePlanner, validateProcedureComposition } from "./procedure-composition.ts";
 import { scopeEnvelope } from 'craft-common-base/scope-policy';
@@ -197,10 +197,13 @@ export class ProcedureStore {
     // record, or later readers get titles that only made sense to the writer.
     validateConcept("procedure", identity.title);
     const id = String(args.procedure_id ?? `experience_procedure_${stableDigest(identity).slice(-20)}`);
+    const programMemory = this.store.find("program_memory_procedure_binding", String(request.id));
+    if (programMemory && programMemory.procedure_id !== id) throw new Error("Program Memory request is bound to another Procedure");
     const existing = this.store.find("experience_procedure", id);
     const identityDigest = stableDigest(identity);
     if (existing) {
       if (existing.identity_digest === identityDigest) return { procedure: existing, idempotent: true };
+      if (programMemory) throw new Error("Program Memory Procedure revisions require a new governed candidate");
       const sameScenario = existing.scope === procedureScope && existing.procedure_kind === procedureKind
         && stableDigest(existing.scenario_signature) === stableDigest(scenarioSignature);
       if (args.evolve !== true || !sameScenario) throw new Error("Experience Procedure idempotency conflict");
@@ -265,6 +268,15 @@ export class ProcedureStore {
     const completed = !invalidated && Array.isArray(procedure.completed_gates) ? procedure.completed_gates.map(String) : [];
     const evidenceIds = strings(args.evidence_ids, "evidence_ids", 1); for (const evidenceId of evidenceIds) this.assertEvidence(evidenceId);
     const passed = args.passed === true;
+    const programMemory = this.store.find("program_memory_procedure_binding", String(procedure.request_id));
+    if (passed && programMemory) {
+      const candidate = this.store.get("program_memory_candidate", String(programMemory.candidate_id));
+      if ((candidate.status !== "submitted" && candidate.status !== "promoted") || candidate.digest !== programMemory.candidate_digest
+        || candidate.request_id !== procedure.request_id || candidate.procedure_id !== procedure.id
+        || candidate.procedure_candidate_version !== procedure.candidate_version) {
+        throw new Error("Program Memory no longer authorizes this Procedure candidate");
+      }
+    }
     let qualification: JsonObject | undefined;
     if (passed && stage === "held_out") {
       qualification = this.verifyProcedureEvaluation(procedure, text(args.evaluation_contract_id, "evaluation_contract_id"), text(args.evaluation_id, "evaluation_id"));
@@ -316,6 +328,16 @@ export class ProcedureStore {
 
   private verifyProcedureEvaluation(procedure: JsonObject, contractId: string, evaluationId: string, prior?: JsonObject): JsonObject {
     const contract = this.store.get("evaluation_contract", contractId);
+    const programMemory = this.store.find("program_memory_procedure_binding", String(procedure.request_id));
+    if (programMemory) {
+      const design = this.store.get("evaluation_contract", String(programMemory.design_id));
+      const { candidate_ref: _candidateRef, ...taskEffectDesign } = (contract.task_effect ?? {}) as JsonObject;
+      if (design.contract_digest !== programMemory.design_digest
+        || stableDigest(contract.scope) !== stableDigest(programMemory.scope)
+        || stableDigest((design.budget as JsonObject | undefined)?.task_effect_design ?? null) !== stableDigest(taskEffectDesign)) {
+        throw new Error("Procedure Evaluation Contract does not match the frozen Program Memory design");
+      }
+    }
     const digest = String(procedure.definition_digest ?? procedure.content_digest ?? procedure.identity_digest ?? "");
     const candidateRef = { kind: "experience_procedure", id: String(procedure.id), version: Number(procedure.candidate_version ?? procedure.version), digest };
     const evaluation = this.evaluationVerifier.verifyTaskEffectEvaluation({ contract_id: contractId, evaluation_id: evaluationId, candidate_ref: candidateRef });
@@ -337,7 +359,8 @@ export class ProcedureStore {
 
   list(args: JsonObject = {}): JsonObject {
     const scope = args.scope === undefined ? null : text(args.scope, "scope");
-    return { procedures: this.store.list("experience_procedure", Number(args.limit ?? 100), (item) => scope === null || item.scope === scope) };
+    return { procedures: this.store.list("experience_procedure", Number(args.limit ?? 100), (item) =>
+      (scope === null || item.scope === scope) && programMemoryProcedureVisible(this.store, item, args.program_memory_scope_id)) };
   }
 
   /** Export only a routeable Procedure and keep it disabled until a Host installs it. */

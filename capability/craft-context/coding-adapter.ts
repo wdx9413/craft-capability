@@ -10,12 +10,9 @@ export class CodingAdapter {
     return this.kernel.captureDomainStatement({ ...args, domain: "coding" });
   }
 
-  recall(args: JsonObject = {}): JsonObject {
-    const scope = args.scope as JsonObject | undefined;
-    const items = (this.kernel.listProgramMemory({}).items as JsonObject[])
-      .filter((item) => item.domain === "coding")
-      .filter((item) => !scope || (String((item.scope as JsonObject)?.kind ?? "") === String(scope.kind)
-        && String((item.scope as JsonObject)?.id ?? "") === String(scope.id)));
-    return { items, scope: scope ?? null };
+  recall(args: JsonObject): JsonObject {
+    const items = (this.kernel.listProgramMemory(args).items as JsonObject[])
+      .filter(item => item.domain === "coding");
+    return { items, scope: args.scope };
   }
 }

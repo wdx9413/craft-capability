@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import type { JsonObject } from 'craft-common-store-local/store';
+import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { evaluateEvolutionValue, type EvolutionValueAction } from "craft-common-ontology";
-import { SelfEvolutionKernel } from "./self-evolution.ts";
+import { matchesEvolutionProjectScope, requireEvolutionProjectScope } from "./evolution-project-scope.ts";
 
 type TravelKind = "transport" | "budget" | "location" | "time_window" | "booking";
-type TravelScope = { scope_kind: "project" | "global" | "session" | "user"; scope_id: string };
 
 interface PreferenceExtraction {
   kind: "preference";
@@ -40,11 +39,9 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function scopeOf(value: unknown): TravelScope {
-  const raw = value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
-  const kind = text(raw.scope_kind) || "project";
-  if (!["project", "global", "session", "user"].includes(kind)) throw new Error("unsupported travel scope_kind");
-  return { scope_kind: kind as TravelScope["scope_kind"], scope_id: text(raw.scope_id) || "local" };
+function scopeOf(value: unknown): { scope_kind: "project"; scope_id: string } {
+  const scope = requireEvolutionProjectScope(value);
+  return { scope_kind: scope.kind, scope_id: scope.id };
 }
 
 function timestamp(value: string, endOfDay: boolean, year: number): string {
@@ -58,17 +55,23 @@ function contentOf(memory: JsonObject): string {
   return typeof memory.content === "string" ? memory.content : text(memory.body);
 }
 
+function isTravelMemory(memory: JsonObject): boolean {
+  const topic = text(memory.topic);
+  return topic.startsWith("travel:") || topic.startsWith("preference:travel:")
+    || /^(?:Travel (?:budget ceiling:|time window:|location constraint:|booking )|I prefer .+ for travel$)/u.test(contentOf(memory));
+}
+
 export class TravelAdapter {
-  readonly selfEvolution: SelfEvolutionKernel;
   readonly memory: {
     knowledgeMemoryInstallBuiltins(): unknown;
     memoryLedgerRemember(args: JsonObject): JsonObject;
+    memoryLedgerGet(args: JsonObject): JsonObject;
     memoryLedgerList(args: JsonObject): JsonObject;
     memoryLedgerTransition(args: JsonObject): JsonObject;
   };
-  readonly store: { find(kind: string, id: string): JsonObject | null; create(kind: string, id: string, payload: JsonObject): JsonObject; get(kind: string, id: string): JsonObject };
-  constructor(input: { selfEvolution: SelfEvolutionKernel; memory: TravelAdapter["memory"]; store: TravelAdapter["store"] }) {
-    this.selfEvolution = input.selfEvolution; this.memory = input.memory; this.store = input.store;
+  readonly store: CraftStore;
+  constructor(input: { memory: TravelAdapter["memory"]; store: CraftStore }) {
+    this.memory = input.memory; this.store = input.store;
   }
 
   private prepare(): void {
@@ -119,6 +122,14 @@ export class TravelAdapter {
     this.prepare();
     const statement = text(args.statement);
     const scope = scopeOf(args.scope);
+    const project = requireEvolutionProjectScope(args.scope);
+    const evidenceIds = Array.isArray(args.evidence_ids) ? [...new Set(args.evidence_ids.map(String))].slice(0, 50) : [];
+    for (const id of evidenceIds) {
+      const evidence = this.store.find("evidence", id);
+      const metadata = evidence?.metadata as JsonObject | undefined;
+      if (!evidence || !matchesEvolutionProjectScope(evidence.scope ?? metadata?.project_scope_id, project))
+        throw new Error("travel evidence is not in scope");
+    }
     const extracted = TravelAdapter.extract(statement, text(args.domain) || "travel");
     const maxItems = Math.max(1, Math.min(20, Number.isFinite(Number(args.max_items)) ? Number(args.max_items) : 20));
     const nowMs = Number.isFinite(Date.parse(text(args.now))) ? Date.parse(text(args.now)) : Date.now();
@@ -128,14 +139,15 @@ export class TravelAdapter {
     for (const item of extracted.preferences.slice(0, maxPreferences)) {
       const result = this.call("memoryLedgerRemember", { source_id: "builtin.evidence-wiki", kind: "preference", project_root: text(args.project_root) || undefined,
         scope_kind: scope.scope_kind, scope_id: scope.scope_id, content: item.content, topic: item.topic,
-        concept_kind: "preference" }) as JsonObject;
+        evidence_ids: evidenceIds, concept_kind: "preference" }) as JsonObject;
       preferences.push({ ...(result.memory as JsonObject), kind: "preference", content: item.content });
       void item.travel_kind;
     }
     for (const item of extracted.plans.slice(0, Math.max(0, maxItems - preferences.length))) {
       const validUntil = item.end ?? (item.kind === "booking" ? new Date(nowMs + 30 * 24 * 60 * 60 * 1000).toISOString() : undefined);
       const result = this.call("memoryLedgerRemember", { source_id: "builtin.evidence-wiki", kind: "episodic", project_root: text(args.project_root) || undefined,
-        scope_kind: scope.scope_kind, scope_id: scope.scope_id, content: item.content, concept_kind: "fact",
+        scope_kind: scope.scope_kind, scope_id: scope.scope_id, content: item.content,
+        topic: `travel:${item.kind}`, evidence_ids: evidenceIds, concept_kind: "fact",
         ...(validUntil ? { valid_until: validUntil } : {}) }) as JsonObject;
       plans.push({ ...(result.memory as JsonObject), kind: item.kind, content: item.content, ...(item.start ? { effective_from: item.start } : {}) });
     }
@@ -146,7 +158,6 @@ export class TravelAdapter {
   recall(args: JsonObject): JsonObject {
     this.prepare();
     const scope = scopeOf(args.scope);
-    const includeHistory = args.include_history === true;
     const includeStale = args.include_stale === true;
     const nowMs = Number.isFinite(Date.parse(text(args.now))) ? Date.parse(text(args.now)) : Date.now();
     const activeTopic = text(args.topic);
@@ -155,11 +166,12 @@ export class TravelAdapter {
     const items: JsonObject[] = [];
     const excluded: JsonObject[] = [];
     for (const memory of (listed.memories as JsonObject[] | undefined) ?? []) {
+      if (!isTravelMemory(memory)) continue;
       const content = contentOf(memory);
       const query = text(args.query);
       if (query && !content.toLowerCase().includes(query.toLowerCase())) continue;
       if (activeTopic && text(memory.topic) !== activeTopic && !content.toLowerCase().includes(activeTopic.toLowerCase())) continue;
-      const stale = typeof memory.valid_until === "string" && Number.isFinite(Date.parse(memory.valid_until)) && Date.parse(memory.valid_until) < nowMs;
+      const stale = typeof memory.valid_until === "string" && Date.parse(memory.valid_until) <= nowMs;
       const supersededById = typeof args.superseded_by === "string" ? args.superseded_by
         : args.superseded_by === true ? String(memory.replacement_id ?? "") : "";
       if (memory.status === "superseded" || memory.status === "revoked" || memory.status === "expired"
@@ -180,11 +192,15 @@ export class TravelAdapter {
     const scope = scopeOf(args.scope);
     const previousId = text(args.previous_id);
     const replacementId = text(args.replacement_id);
+    const previous = this.scopedTravelMemory({ memory_id: previousId, scope: args.scope });
+    this.scopedTravelMemory({ memory_id: replacementId, scope: args.scope });
     const result = this.call("memoryLedgerTransition", { memory_id: previousId, status: "superseded",
+      expected_version: previous.version,
       replacement_id: text(args.replacement_id), reason: text(args.reason) || "superseded by newer travel plan",
       scope_kind: scope.scope_kind, scope_id: scope.scope_id }) as JsonObject;
     this.call("memoryLedgerRemember", { source_id: "builtin.evidence-wiki", kind: "working", working_note: true,
-      scope_kind: scope.scope_kind, scope_id: scope.scope_id, content: `travel supersede ${previousId} -> ${replacementId}` });
+      scope_kind: scope.scope_kind, scope_id: scope.scope_id, topic: "travel:audit",
+      content: `travel supersede ${previousId} -> ${replacementId}` });
     return result;
   }
 
@@ -194,32 +210,36 @@ export class TravelAdapter {
     const listed = this.call("memoryLedgerList", { scope_kind: scope.scope_kind, scope_id: scope.scope_id,
       limit: 100, include_history: true }) as JsonObject;
     return { scope, items: ((listed.memories as JsonObject[] | undefined) ?? []).filter((memory) =>
-      ["superseded", "revoked", "expired"].includes(String(memory.status))) };
+      isTravelMemory(memory) && ["superseded", "revoked", "expired"].includes(String(memory.status))) };
   }
 
   forget(args: JsonObject): JsonObject {
     this.prepare();
     const scope = scopeOf(args.scope);
-    return this.call("memoryLedgerTransition", { memory_id: text(args.memory_id), status: "revoked",
+    const memory = this.scopedTravelMemory(args);
+    if (memory.status === "revoked") return { memory, idempotent: true };
+    return this.call("memoryLedgerTransition", { memory_id: text(args.memory_id), status: "revoked", expected_version: memory.version,
       reason: text(args.reason) || "explicit travel forget request", scope_kind: scope.scope_kind, scope_id: scope.scope_id }) as JsonObject;
   }
 
   apply(args: JsonObject): JsonObject {
     if (text(args.domain) && text(args.domain) !== "travel") return { status: "denied", reason: "domain isolation" };
-    this.prepare();
-    const kernel = this.selfEvolution;
-    kernel.ensureAdapters();
-    let candidate = kernel.captureProgramMemory({ statement: text(args.statement), domain: "travel",
-      scenario_key: "travel.apply", steps: Array.isArray(args.steps) ? args.steps : [],
-      evidence_ids: Array.isArray(args.evidence_ids) ? args.evidence_ids : [], scope: args.scope ?? {} });
-    if (!Array.isArray(args.evidence_ids) || args.evidence_ids.length === 0) return { ...candidate, status: "diagnostic" };
-    const threshold = Number((kernel.store.find("domain_adapter", "domain_adapter_travel") as JsonObject | undefined)?.value_threshold ?? 2);
-    while (Number((candidate as JsonObject).repetitions ?? 0) < threshold) {
-      candidate = kernel.captureProgramMemory({ statement: text(args.statement), domain: "travel",
-        scenario_key: "travel.apply", steps: Array.isArray(args.steps) ? args.steps : [],
-        evidence_ids: Array.isArray(args.evidence_ids) ? args.evidence_ids : [], scope: args.scope ?? {} });
-    }
-    return { ...kernel.submitProgramMemory(String((candidate as JsonObject).id)), domain: "travel" };
+    const memory = this.scopedTravelMemory(args);
+    if (memory.status !== "active" || Date.parse(text(memory.valid_until)) <= Date.now()
+      || (args.expected_version !== undefined && memory.version !== args.expected_version))
+      throw new Error("travel memory is unavailable");
+    return { status: "applied", domain: "travel", memory };
+  }
+
+  private scopedTravelMemory(args: JsonObject): JsonObject {
+    const scope = requireEvolutionProjectScope(args.scope);
+    const memoryId = text(args.memory_id);
+    const record = this.store.find("memory_ledger", memoryId, undefined, false);
+    if (!record || !matchesEvolutionProjectScope(record.scope, scope)) throw new Error("travel memory is not in scope");
+    const { memory } = this.memory.memoryLedgerGet({ memory_id: memoryId, scope_kind: scope.kind, scope_id: scope.id });
+    const result = memory as JsonObject;
+    if (!isTravelMemory(result) || result.topic === "travel:audit") throw new Error("travel memory is not in scope");
+    return result;
   }
 
   private call(name: string, args: JsonObject): unknown {

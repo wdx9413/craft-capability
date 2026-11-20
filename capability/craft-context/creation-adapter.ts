@@ -1,4 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { stableDigest } from "craft-common-base/digest";
+import { redact } from "craft-common-base/workflow";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { matchesEvolutionProjectScope, requireEvolutionProjectScope } from "./evolution-project-scope.ts";
 
 const ARTIFACT_TYPES = ["text", "image", "video", "slides"] as const;
 const MODALITIES = ["text", "visual", "video", "mixed"] as const;
@@ -28,21 +32,6 @@ function isModality(value: string): value is Modality {
 
 function isUserChoice(value: string): value is UserChoice {
   return (USER_CHOICES as readonly string[]).includes(value);
-}
-
-function scopeKey(scope: JsonObject): string {
-  const kind = text(scope.scope_kind);
-  const id = text(scope.scope_id);
-  if (!kind || !id) throw new Error("scope must declare scope_kind and scope_id");
-  return `${kind}:${id}`;
-}
-
-function recordScope(record: JsonObject): JsonObject {
-  return object(record.scope);
-}
-
-function scopeMatches(left: JsonObject, right: JsonObject): boolean {
-  return text(left.scope_kind) === text(right.scope_kind) && text(left.scope_id) === text(right.scope_id);
 }
 
 function containsPrompt(record: JsonObject, prompt: string): boolean {
@@ -78,11 +67,12 @@ export class CreationAdapter {
     return Boolean(domain && domain !== "creation");
   }
 
-  private normalizeScope(value: unknown): JsonObject {
-    const scope = object(value);
-    if (!Object.keys(scope).length) return { scope_kind: "global", scope_id: "creation" };
-    scopeKey(scope);
-    return scope;
+  private scopedRecord(args: JsonObject): JsonObject {
+    const scope = requireEvolutionProjectScope(args.scope);
+    const record = this.store.find("artifact_lineage", this.lineageId(args.id));
+    if (!record || !matchesEvolutionProjectScope(record.scope, scope)) throw new Error("artifact lineage is not in scope");
+    if (args.expected_version !== undefined && record.version !== args.expected_version) throw new Error("artifact lineage version changed");
+    return record;
   }
 
   private lineageId(value: unknown): string {
@@ -93,42 +83,49 @@ export class CreationAdapter {
 
   write(args: JsonObject): JsonObject {
     if (this.denyOtherDomain(text(args.domain))) return { status: "denied", reason: "domain isolation" };
+    const artifactType = text(args.artifact_type);
+    if (!isArtifactType(artifactType)) throw new Error("unsupported artifact type");
     const route = CreationAdapter.route(args);
-    const artifactType = route.artifact_type as ArtifactType;
-    const id = this.lineageId(args.id || `creation_${Date.now()}`);
-    const version = 1;
+    const id = this.lineageId(args.id || randomUUID());
     const userChoice = text(args.user_choice);
     if (userChoice && !isUserChoice(userChoice)) throw new Error("unsupported user choice");
     const reliability = Number(args.reliability ?? 0.5);
     if (!Number.isFinite(reliability) || reliability < 0 || reliability > 1) throw new Error("reliability must be between 0 and 1");
-    const scope = this.normalizeScope(args.scope);
+    const scope = requireEvolutionProjectScope(args.scope);
     const modality = text(args.modality) || CreationAdapter.defaultModality(artifactType);
     const requestedVersion = Number(args.version ?? 1);
     if (!Number.isSafeInteger(requestedVersion) || requestedVersion < 1) throw new Error("version must be a positive integer");
-    const signature: JsonObject = { artifact_type: artifactType, source_refs: Array.isArray(args.source_refs) ? args.source_refs : [],
-      parameters: object(args.parameters), tool: args.tool === undefined ? null : text(args.tool),
-      user_choice: userChoice || null, evaluation: args.evaluation === undefined ? null : text(args.evaluation) };
-    const stableSignature = JSON.stringify(signature, Object.keys(signature).sort());
+    const sourceRefs = Array.isArray(args.source_refs)
+      ? args.source_refs.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 50).map(ref => redact(ref.trim().slice(0, 500)))
+      : [];
+    const parameters = Object.fromEntries(Object.entries(object(args.parameters)).slice(0, 30)
+      .filter(([key]) => !/(?:token|secret|cookie|password|api.?key|authorization)/iu.test(key))
+      .flatMap<[string, string | number | boolean | null]>(([key, value]) => typeof value === "string" ? [[key, redact(value).slice(0, 200)]]
+        : typeof value === "number" || typeof value === "boolean" || value === null ? [[key, value]] : []));
+    const tool = redact(text(args.tool)).slice(0, 100) || null;
+    const evaluation = redact(text(args.evaluation)).slice(0, 500) || null;
+    const signature = { artifact_type: artifactType, source_refs: sourceRefs, parameters, tool, user_choice: userChoice || null, evaluation };
     const record: JsonObject = {
-      id, artifact_type: artifactType, modality,
-      source_refs: Array.isArray(args.source_refs) ? args.source_refs.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 50) : [],
-      prompt: args.prompt === undefined ? null : text(args.prompt),
-      parameters: object(args.parameters), tool: args.tool === undefined ? null : text(args.tool), version,
-      user_choice: userChoice || null, evaluation: args.evaluation === undefined ? null : text(args.evaluation),
-      reliability, scope, requested_version: requestedVersion, signature_digest: stableSignature,
+      ...signature, id, modality, prompt: redact(text(args.prompt)).slice(0, 500) || null,
+      reliability, scope, requested_version: requestedVersion, signature_digest: stableDigest(signature),
     };
-    this.store.save("artifact_lineage", id, record);
-    return { ...record, route: route.route };
+    return this.store.transaction(() => {
+      const current = this.store.find("artifact_lineage", id);
+      if (current && !matchesEvolutionProjectScope(current.scope, scope)) throw new Error("artifact lineage is not in scope");
+      if (current?.status === "forgotten") throw new Error("artifact lineage is unavailable");
+      const saved = this.store.save("artifact_lineage", id, record);
+      return { ...saved, route: route.route };
+    });
   }
 
-  recall(args: JsonObject): JsonObject {
+  recall(args: JsonObject, abstainOnConflicts = true): JsonObject {
     if (this.denyOtherDomain(text(args.domain))) return { status: "denied", reason: "domain isolation", items: [] };
-    const route = CreationAdapter.route(args);
-    const scope = args.scope === undefined ? null : this.normalizeScope(args.scope);
+    const route = args.artifact_type === undefined && args.modality === undefined ? { route: "all" } : CreationAdapter.route(args);
+    const scope = requireEvolutionProjectScope(args.scope);
     const prompt = text(args.prompt).toLowerCase();
     const targetType = text(args.artifact_type);
     const records = this.store.list("artifact_lineage", MAX_LINEAGE_RECORDS, (item) => {
-      if (scope && !scopeMatches(recordScope(item), scope)) return false;
+      if (!matchesEvolutionProjectScope(item.scope, scope) || item.status === "forgotten") return false;
       if (route.route === "artifact_type" && item.artifact_type !== targetType) return false;
       if (route.route === "modality" && item.modality !== route.modality) return false;
       return containsPrompt(item, prompt);
@@ -136,7 +133,7 @@ export class CreationAdapter {
     const weak = records.filter((item) => Number(item.reliability) < RELIABILITY_FLOOR);
     const candidates = records.filter((item) => Number(item.reliability) >= RELIABILITY_FLOOR);
     const signatures = new Set(candidates.map((item) => String(item.signature_digest)));
-    if (candidates.length > 1 && signatures.size > 1 && !signatures.has("")) {
+    if (abstainOnConflicts && candidates.length > 1 && signatures.size > 1 && !signatures.has("")) {
       return { route: route.route, abstain: true, reason: "conflicting_lineage", downweighted: candidates.map((item) => String(item.id)), items: [] };
     }
     if (!candidates.length && weak.length) {
@@ -148,20 +145,22 @@ export class CreationAdapter {
 
   apply(args: JsonObject): JsonObject {
     if (this.denyOtherDomain(text(args.domain))) return { status: "denied", reason: "domain isolation" };
-    const id = this.lineageId(args.id);
-    const scope = this.normalizeScope(args.scope);
-    const record = this.store.find("artifact_lineage", id);
-    if (!record || !scopeMatches(recordScope(record), scope)) throw new Error("artifact lineage is not in scope");
-    return { status: "applied", domain: "creation", id, artifact_type: record.artifact_type, version: record.version };
+    const record = this.scopedRecord(args);
+    if (record.status === "forgotten" || Number(record.reliability) < RELIABILITY_FLOOR)
+      throw new Error("artifact lineage is unavailable");
+    return { ...record, status: "applied", domain: "creation" };
   }
 
   forget(args: JsonObject): JsonObject {
     if (this.denyOtherDomain(text(args.domain))) return { status: "denied", reason: "domain isolation" };
-    const id = this.lineageId(args.id);
-    const scope = this.normalizeScope(args.scope);
-    const record = this.store.find("artifact_lineage", id);
-    if (!record || !scopeMatches(recordScope(record), scope)) throw new Error("artifact lineage is not in scope");
-    this.store.save("artifact_lineage", id, { ...record, reliability: 0, source_refs: [], prompt: null, parameters: {}, evaluation: null });
-    return { status: "forgotten", domain: "creation", id };
+    return this.store.transaction(() => {
+      const record = this.scopedRecord(args);
+      const id = String(record.id);
+      if (record.status !== "forgotten") {
+        this.store.save("artifact_lineage", id, { artifact_type: record.artifact_type, modality: record.modality,
+          scope: record.scope, status: "forgotten", reliability: 0, forgotten_at: new Date().toISOString() });
+      }
+      return { status: "forgotten", domain: "creation", id };
+    });
   }
 }

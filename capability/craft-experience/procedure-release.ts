@@ -71,6 +71,13 @@ export function selectedProcedure(store: CraftStore, id: string, channel: unknow
   return candidate.lifecycle === "candidate" ? candidate : null;
 }
 
+/** Existing Experience records need no additional grant; projected Program Memory does. */
+export function programMemoryProcedureVisible(store: CraftStore, procedure: JsonObject, authorizedProject: unknown): boolean {
+  const binding = typeof procedure.request_id === "string"
+    ? store.find("program_memory_procedure_binding", procedure.request_id, undefined, false) : null;
+  return !binding || (typeof authorizedProject === "string" && (binding.scope as JsonObject | undefined)?.id === authorizedProject);
+}
+
 /** Writable candidates require a separate, checkpointed workspace owned by the test Work Loop. */
 export function assertProcedureTestIsolation(store: CraftStore, args: JsonObject, actualWorkspaceId?: unknown): void {
   const testId = text(args.test_workspace_id, "test_workspace_id"), baselineId = text(args.baseline_workspace_id, "baseline_workspace_id");

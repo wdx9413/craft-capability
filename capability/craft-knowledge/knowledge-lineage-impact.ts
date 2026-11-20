@@ -108,7 +108,10 @@ function conceptOf(store: CraftStore, node: JsonObject): string | null {
 export class KnowledgeLineageImpactKernel {
   readonly store: CraftStore;
   private readonly relations: KnowledgeRelationKernel;
-  constructor(store: CraftStore) { this.store = store; this.relations = new KnowledgeRelationKernel(store); }
+  constructor(store: CraftStore, visibleEdge?: (edge: JsonObject) => boolean) {
+    this.store = store;
+    this.relations = new KnowledgeRelationKernel(store, visibleEdge);
+  }
 
   /**
    * Report every claim derived (directly or transitively) from `root`, with a
@@ -185,7 +188,7 @@ export class KnowledgeLineageImpactKernel {
 }
 
 /** Wrap the kernel result in the JsonObject shape every service delegate returns. */
-export function knowledgeLineageImpact(store: CraftStore, args: JsonObject): JsonObject {
-  const result = new KnowledgeLineageImpactKernel(store).analyze(args);
+export function knowledgeLineageImpact(store: CraftStore, args: JsonObject, visibleEdge?: (edge: JsonObject) => boolean): JsonObject {
+  const result = new KnowledgeLineageImpactKernel(store, visibleEdge).analyze(args);
   return result as unknown as JsonObject;
 }

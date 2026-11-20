@@ -60,7 +60,11 @@ const NODE_KEY = (kind: string, id: string, version: number | null): string => `
 
 export class KnowledgeRelationKernel {
   readonly store: CraftStore;
-  constructor(store: CraftStore) { this.store = store; }
+  private readonly visibleEdge?: (edge: JsonObject) => boolean;
+  constructor(store: CraftStore, visibleEdge?: (edge: JsonObject) => boolean) {
+    this.store = store;
+    if (visibleEdge !== undefined) this.visibleEdge = visibleEdge;
+  }
 
   /** Open questions are cheap and read-only; they never resolve an endpoint record. */
   neighbors(args: JsonObject): JsonObject {
@@ -160,7 +164,8 @@ export class KnowledgeRelationKernel {
     const at = args.as_of === undefined || args.as_of === null ? Date.now() : Date.parse(instant(args.as_of, "as_of"));
     const limit = args.limit === undefined ? 50 : integer(args.limit, "limit", 1, 1_000);
     const matched = this.store.list("knowledge_relation", 10_000, (item) => liveAt(item, at) && (relation === null || item.relation === relation)
-      && ((item.source as JsonObject).kind === kind && (item.source as JsonObject).id === id || (item.target as JsonObject).kind === kind && (item.target as JsonObject).id === id))
+      && ((item.source as JsonObject).kind === kind && (item.source as JsonObject).id === id || (item.target as JsonObject).kind === kind && (item.target as JsonObject).id === id)
+      && (this.visibleEdge === undefined || this.visibleEdge(item)))
       .sort((left, right) => String(left.id).localeCompare(String(right.id)));
     const resolved: JsonObject[] = [];
     for (const record of matched) {

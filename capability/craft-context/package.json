@@ -21,7 +21,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@craft/capability-knowledge": "0.20.7",
+    "@craft/capability-knowledge": "workspace:^",
     "craft-common-base": "0.20.4",
     "craft-common-log": "0.20.12",
     "craft-common-ontology": "0.20.7",

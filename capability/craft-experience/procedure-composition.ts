@@ -1,4 +1,4 @@
-import { assertProcedureTestIsolation, selectedProcedure } from "./procedure-release.ts";
+import { assertProcedureTestIsolation, programMemoryProcedureVisible, selectedProcedure } from "./procedure-release.ts";
 import { selectGraph } from "./procedure-graph.ts";
 /** Entry/exit contracts compile to Host plans; this module never executes steps. */
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
@@ -138,6 +138,7 @@ export class ProcedurePlanner {
       if (ancestors.length >= 8) throw new Error("Procedure Call depth exceeds 8");
       const procedure = selectedProcedure(this.store, id, args.release_channel);
       if (!procedure || procedure.version !== pinned || args.release_channel !== "test" && (procedure.routeable !== true || procedure.lifecycle !== "routeable")) throw new Error(`Procedure unavailable, revoked, or version drifted: ${id}`);
+      if (!programMemoryProcedureVisible(this.store, procedure, args.program_memory_scope_id)) throw new Error("Program Memory Procedure is unavailable in this project");
       if (procedure.scope !== scope || !scopeAllows(scopeEnvelope(procedure.scope_envelope, scopeFromKey(scope)), access)) throw new Error(`Procedure scope or audience denied: ${id}`);
       if (!procedureDefinitionRef(procedure.definition_ref)) throw new Error("Procedure has no checked definition");
       const definition = definitions.read(procedure.definition_ref);

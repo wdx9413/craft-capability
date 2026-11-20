@@ -34,8 +34,8 @@ importers:
   capability/craft-context:
     dependencies:
       '@craft/capability-knowledge':
-        specifier: 0.20.7
-        version: 0.20.7
+        specifier: workspace:^
+        version: link:../craft-knowledge
       craft-common-base:
         specifier: 0.20.4
         version: 0.20.4

@@ -21,7 +21,7 @@ import { contextFeedbackWeights } from "./context-feedback-weight.ts";
 import { experienceGatePenalty } from "./gate-signals.ts";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { scopeAllows, scopeEnvelope, type ScopeAccess } from 'craft-common-base/scope-policy';
-import { activeProcedure } from "./procedure-release.ts";
+import { activeProcedure, programMemoryProcedureVisible } from "./procedure-release.ts";
 import { retrievalTerms } from 'craft-common-base/retrieval-terms';
 import { contextAssetMatches, contextAssetRef } from 'craft-common-base/context-assets';
 
@@ -54,11 +54,11 @@ export class ExperienceContribution implements ContextContributionProvider {
    * Matching is deliberately scoped and bounded. Experience is a Context member alongside
    * Knowledge and Memory, but it never reads an unscoped legacy record or a diagnostic pattern.
    */
-  async contribute(request: ContextRequest): Promise<ContextContribution> {
+  async contribute(request: ContextRequest & { program_memory_scope_id?: string }): Promise<ContextContribution> {
     return observeOperation(this.store, "experience", "contribute", request, () => this.readContribution(request));
   }
 
-  private async readContribution(request: ContextRequest): Promise<ContextContribution> {
+  private async readContribution(request: ContextRequest & { program_memory_scope_id?: string }): Promise<ContextContribution> {
     const wanted = terms(request.query);
     const scopes = request.scope_stack ?? [{ kind: request.scope_kind, id: request.scope_id }];
     const access: ScopeAccess = { principal_id: request.principal_id, principal_ids: request.principal_ids, tenant_id: request.tenant_id, purpose: request.cognitive_purpose };
@@ -74,11 +74,13 @@ export class ExperienceContribution implements ContextContributionProvider {
     const scoped = this.store.listScoped("experience_procedure", scopes, 10_001, procedure =>
       scopes.some(scope => matchesScope(procedure.scope, scope))
       && scopeAllows(scopeEnvelope(procedure.scope_envelope, recordScope(procedure.scope)), access)
+      && programMemoryProcedureVisible(this.store, procedure, request.program_memory_scope_id)
       && (request.domain === undefined ? domainOf(procedure) === null : domainOf(procedure) === request.domain));
     const hasDraft = this.store.listScoped("experience_graph_draft", scopes, 1, draft =>
       scopes.some(scope => matchesScope(draft.scope, scope))
       && scopeAllows(scopeEnvelope(draft.scope_envelope, recordScope(draft.scope)), access)).length > 0;
-    const eligible = scoped.map(latest => activeProcedure(this.store, String(latest.id))).filter((item): item is JsonObject => item !== null);
+    const eligible = scoped.map(latest => activeProcedure(this.store, String(latest.id))).filter((item): item is JsonObject =>
+      item !== null && programMemoryProcedureVisible(this.store, item, request.program_memory_scope_id));
     if (eligible.length > 10_000) throw new Error("Experience candidate budget exceeded; narrow the scope stack");
     const descriptions = new Map(eligible.map(procedure => [String(procedure.id), this.describe(procedure)]));
     const feedback = contextFeedbackWeights(this.store, "experience", eligible.map(procedure => String(procedure.id)));

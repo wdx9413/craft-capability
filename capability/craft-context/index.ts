@@ -1,4 +1,6 @@
 export { SelfEvolutionKernel, classifyDomain, DOMAIN_ADAPTER_NAMES } from "./self-evolution.ts";
+export { evolutionProjectScope, matchesEvolutionProjectScope, requireEvolutionProjectScope } from "./evolution-project-scope.ts";
+export type { EvolutionProjectScope } from "./evolution-project-scope.ts";
 export type { DomainAdapterName, DomainOrGeneral, DomainAdapterRecord } from "./self-evolution.ts";
 export { CONTEXT_KERNELS, CONTEXT_OWNS, contextCapability } from "./capability.ts";
 export { CodingAdapter } from "./coding-adapter.ts";
