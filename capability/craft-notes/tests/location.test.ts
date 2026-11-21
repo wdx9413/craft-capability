@@ -95,6 +95,8 @@ test("reactivation requires a confirmed device note and disabled devices gain no
     f.registry.registerDevice({ id: "edge-02", device_kind: "ssh", host_kind: "cloud", device_note: "远程构建节点" });
     f.registry.disableDevice("edge-02");
     assert.throws(() => f.registry.registerDevice({ id: "edge-02", status: "active", device_note: "" }), /reactivated/u);
+    assert.throws(() => f.registry.registerDevice({ id: " EDGE-02 ", status: "active", device_note: "合法说明" }), /reactivated/u);
+    assert.throws(() => f.registry.notes.createDevice({ id: "edge-02", status: "active", note: "绕过入口" }), /reactivated/u);
     assert.throws(() => f.registry.record({ path: "/srv/app", description: "app", device_id: "edge-02" }), /not active/u);
     f.registry.notes.revoke({ id: f.store.list("craft_note", 10, r => r.subject_key === "edge-02")[0]!.id as string,
       expected_version: Number(f.store.list("craft_note", 10, r => r.subject_key === "edge-02")[0]!.version), revoked_by: "u", reason: "r" });

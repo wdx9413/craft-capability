@@ -1,5 +1,6 @@
 import { stableDigest } from "craft-common-base/digest";
 import type { CraftStore, JsonObject } from "craft-common-store-local/store";
+import { evolutionProjectScope } from "./evolution-project-scope.ts";
 
 export type ProgramMemorySources = { observations?: Pick<CraftStore, "find">; design?: Pick<CraftStore, "find">; proof?: Pick<CraftStore, "find"> };
 
@@ -7,6 +8,21 @@ const candidateKind = "program_memory_candidate";
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0))].sort() : [];
+}
+
+export function classifiedProgramMemoryScenarioMatches(signatures: JsonObject[], scenarioKey: unknown, scope: unknown): boolean {
+  const project = evolutionProjectScope(scope);
+  const signatureProjectId = (value: unknown): string | null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const project = value as JsonObject;
+    if (project.kind !== undefined && project.kind !== "project") return null;
+    const id = project.id ?? project.scope_id;
+    return typeof id === "string" && id.trim() ? id.replace(/^project:/u, "") : null;
+  };
+  return Boolean(project && signatures.length && signatures.every(signature =>
+    typeof signature.scenario_key === "string" && signature.scenario_key.length > 0 && signature.scenario_key === scenarioKey
+    && signatureProjectId(signature.project) === project.id.replace(/^project:/u, ""))
+    && new Set(signatures.map(stableDigest)).size === 1);
 }
 
 export function captureGovernedProgramMemory(store: CraftStore, args: JsonObject, sources: ProgramMemorySources = {}): JsonObject {
@@ -89,9 +105,9 @@ export function programMemorySubmission(store: CraftStore, candidate: JsonObject
   if (observations.length < Math.max(2, Number(adapter?.value_threshold ?? 2))) {
     throw new Error("Program Memory requires independent verified project observations");
   }
-  const signatures = observations.map(item => item.scenario_signature as JsonObject | undefined);
-  if (signatures.some(signature => typeof signature?.scenario_key !== "string" || !signature.scenario_key
-    || (signature?.project as JsonObject | undefined)?.id !== (candidate.scope as JsonObject).id)
-    || new Set(signatures.map(stableDigest)).size !== 1) throw new Error("Program Memory requires a classified unambiguous project scenario");
+  const signatures = observations.map(item => item.scenario_signature).filter((value): value is JsonObject =>
+    Boolean(value && typeof value === "object" && !Array.isArray(value)));
+  if (signatures.length !== observations.length || !classifiedProgramMemoryScenarioMatches(signatures, candidate.scenario_key, candidate.scope))
+    throw new Error("Program Memory requires a classified unambiguous project scenario");
   return { design, observations };
 }

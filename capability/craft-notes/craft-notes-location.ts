@@ -223,7 +223,7 @@ export class CraftNotesLocationRegistry {
 
   /** Register or update device metadata. Disabled devices stop being recallable. */
   registerDevice(args: RegisterDeviceArgs): DeviceRecord {
-    const id = String(args.id ?? `device_${randomUUID()}`);
+    const id = args.id === undefined || args.id === null ? `device_${randomUUID()}` : normalizeDeviceId(args.id);
     const existing = this.store.find("device", id);
     if (existing?.status === "disabled" && args.status === "active") {
       throw new Error("device must be reactivated through setDeviceStatus with a confirmed Device Note");

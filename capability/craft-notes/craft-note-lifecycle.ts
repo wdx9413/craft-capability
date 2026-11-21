@@ -64,6 +64,9 @@ export class CraftNotesRegistry {
     const id = deviceId(args.id ?? args.device_id);
     const noteText = this.#noteText(args.note ?? args.description, "note");
     const existing = this.store.find("device", id);
+    if (existing?.status === "disabled" && args.status === "active") {
+      throw new Error("device must be reactivated through setDeviceStatus with a confirmed Device Note");
+    }
     const now = new Date().toISOString();
     const device = { ...(existing ?? {}), ...args, id, device_note: noteText,
       status: args.status === "disabled" || existing?.status === "disabled" && args.status !== "active" ? "disabled" : "active", updated_at: now };

@@ -72,6 +72,18 @@ test("tokens round-trip immediately and persist across vault instances", () => {
   }
 });
 
+test("closed vaults reject token, restore and flush operations", () => {
+  const root = directory();
+  try {
+    const vault = new TokenVault(root, "closed-session");
+    const token = vault.token("fixture", "synthetic-value");
+    vault.close();
+    assert.throws(() => vault.token("fixture", "later-value"), /Vault is closed/u);
+    assert.throws(() => vault.restore(token), /Vault is closed/u);
+    assert.throws(() => vault.flush(), /Vault is closed/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("restore rejects unknown, edited and malformed placeholders", () => {
   const root = directory();
   const vault = new TokenVault(root, "session-b");

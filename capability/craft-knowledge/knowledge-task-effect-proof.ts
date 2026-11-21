@@ -1,8 +1,9 @@
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { stableDigest } from 'craft-common-base/digest';
 
-type EvaluationDependencyReader = (id: string) => JsonObject | null;
+export type EvaluationDependencyReader = (id: string) => JsonObject | null;
 const evaluationReaders = new WeakMap<CraftStore, EvaluationDependencyReader>();
+export const WORKBENCH_EVALUATION_DEPENDENCY_KIND = "workbench_evaluation";
 
 /** The Host binds Eval's read port; Knowledge retains only exact dependency references. */
 export function bindKnowledgeTaskEffectEvaluationReader(store: CraftStore, reader: EvaluationDependencyReader): void {
@@ -18,6 +19,7 @@ export function knowledgeTaskEffectAssessmentDigest(receipt: JsonObject): string
 
 /** Check the local immutable assessment and every dependency observed when it was issued. */
 export function knowledgeTaskEffectProofVerified(store: CraftStore, run: JsonObject): boolean {
+  try {
   const receipt = store.find("knowledge_task_effect", knowledgeTaskEffectId(run), undefined, false);
   if (!receipt || receipt.version !== 1 || receipt.policy !== KNOWLEDGE_TASK_EFFECT_POLICY || receipt.status !== "eligible"
     || receipt.execution_origin !== "controlled_paired_host_tasks" || receipt.retrieval_run_digest !== stableDigest(run)
@@ -29,9 +31,10 @@ export function knowledgeTaskEffectProofVerified(store: CraftStore, run: JsonObj
     const ref = value as JsonObject;
     if (typeof ref.kind !== "string" || typeof ref.id !== "string" || seen.has(`${ref.kind}:${ref.id}`)) return false;
     seen.add(`${ref.kind}:${ref.id}`);
-    const reader = ref.kind === "workbench_evaluation" ? evaluationReaders.get(store) : undefined;
-    const record = reader ? reader(ref.id) : store.find(ref.kind, ref.id, undefined, false);
+    const reader = ref.kind === WORKBENCH_EVALUATION_DEPENDENCY_KIND ? evaluationReaders.get(store) : undefined;
+    const record = reader ? (reader(ref.id) ?? store.find(ref.kind, ref.id, undefined, false)) : store.find(ref.kind, ref.id, undefined, false);
     if (!record || record.version !== ref.version || stableDigest(record) !== ref.digest) return false;
   }
   return true;
+  } catch { return false; }
 }

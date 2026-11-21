@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createCipheriv, createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -90,6 +90,21 @@ test("legacy SQLite mappings remain read compatible without claiming a Host", ()
     for (const name of readdirSync(directory).filter(name => name.endsWith(".json"))) {
       assert.equal(statSync(join(directory, name)).mode & 0o777, 0o600);
     }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an interrupted zero-byte legacy database is treated as having no mappings", () => {
+  const root = mkdtempSync(join(tmpdir(), "craft-empty-legacy-vault-"));
+  try {
+    const original = new TokenVault(root, "interrupted-session");
+    const token = original.token("fixture", secret);
+    original.flush(); original.close();
+    const directory = join(root, createHash("sha256").update("interrupted-session").digest("hex"));
+    for (const name of readdirSync(directory).filter(name => name.endsWith(".json"))) unlinkSync(join(directory, name));
+    writeFileSync(join(directory, "mappings.sqlite"), "", { mode: 0o600 });
+    const recovered = new TokenVault(root, "interrupted-session");
+    assert.throws(() => recovered.restore(token), /Unknown mapping/u);
+    recovered.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

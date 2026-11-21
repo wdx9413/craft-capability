@@ -7,6 +7,6 @@
  * this package implements.
  */
 export const CONTEXT_FAMILIES =
-  "craft_(?:evolution_(?:value_decide|domain_adapters|domain_capture|failure_capture|program_memory_(?:capture|list|get|submit|submission_due|promote|feedback)|artifact_lineage_(?:record|recall|apply|forget)|prospective_(?:create|list|fire|revoke)|creation_(?:write|recall|apply|forget)|travel_(?:capture|recall|apply|forget)|research_(?:link|capture|recall|impact|forget)|replication_propose|runbook_(?:capture|revoke)|eval_summary))";
+  "craft_(?:evolution_(?:value_decide|domain_adapters|domain_capture|failure_capture|program_memory_(?:capture|list|get|submit|promote|feedback)|artifact_lineage_(?:record|recall|apply|forget)|prospective_(?:create|list|fire|revoke)|creation_(?:write|recall|apply|forget)|travel_(?:capture|recall|apply|forget)|research_(?:link|capture|recall|impact|forget)|replication_propose|runbook_(?:capture|revoke)|eval_summary))";
 
 export const CONTEXT_OWNS = new RegExp(`^${CONTEXT_FAMILIES}`);

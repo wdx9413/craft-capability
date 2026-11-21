@@ -3,7 +3,7 @@ import { DEFAULT_RULES, Sanitizer, type Json, type Rule } from "./rules.ts";
 import { TokenVault } from "./vault.ts";
 
 export type Host = "claude" | "codex";
-export type Event = "PreToolUse" | "PostToolUse" | "UserPromptSubmit" | "SessionEnd";
+export type Event = "PreToolUse" | "PostToolUse" | "UserPromptSubmit";
 export interface HookInput { session_id?: string; hook_event_name?: string; tool_name?: string; tool_input?: Json; tool_response?: Json; prompt?: string }
 export const FAILURE = "craft-datasec：本地脱敏失败，内容已隐藏。请检查本地规则和私有映射目录。";
 const BINARY = /\.(?:xls[xmb]?|xlt[xm]|pdf|png|jpe?g|gif|webp|bmp|svg|ico|zip|gz|tar|7z|docx?|pptx?|mp[34]|wav)$/i;
@@ -37,10 +37,6 @@ export function handleHook(host: Host, event: Event, input: HookInput, root: str
   const getVault = () => vault ??= new TokenVault(root, input.session_id ?? "", host);
   const apply = (): object => {
     if (input.hook_event_name !== event) throw new Error("Mismatched hook event");
-    if (event === "SessionEnd") {
-      TokenVault.removeSession(root, input.session_id ?? "", host);
-      return {};
-    }
     const sanitizer = new Sanitizer(rules, (name, text) => getVault().token(name, text));
     if (event === "PreToolUse") {
       const args = input.tool_input ?? {};
@@ -68,8 +64,6 @@ export function handleHook(host: Host, event: Event, input: HookInput, root: str
       // Preserve tool schema keys when possible. Never include exception text or the event payload.
       const replacement = input.tool_response ?? null;
       output = { ...hidden(host, FAILURE, blankResult(replacement)), continue: false, stopReason: FAILURE };
-    } else if (event === "SessionEnd") {
-      output = { systemMessage: FAILURE };
     } else {
       output = denied(FAILURE);
     }

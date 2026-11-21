@@ -304,6 +304,8 @@ export class CodebaseIndexKernel {
     const indexId = String(args.index_id ?? `codebase_index_${stableDigest(identity).slice(-20)}`); const existing = this.store.find("codebase_index", indexId);
     if (existing) {
       if (existing.identity_digest !== stableDigest(identity)) throw new Error("Codebase index idempotency conflict");
+      if (existing.graph_storage === PROJECT_GRAPH_STORAGE && this.store.ownerRecords)
+        throw new Error("Codebase graph index was persisted in project storage and must be rebuilt");
       return { index: this.indexStatus(existing, workspace), idempotent: true };
     }
     const graph = this.graph(files);
@@ -380,7 +382,12 @@ export class CodebaseIndexKernel {
       input_digest: stableDigestStreaming({ ...input, diagnostics: relationAnalysisSummary(analyzer, input.diagnostics, relationEdges) }) };
     const indexId = identifier(args.index_id ?? `codebase_index_${stableDigest(identity).slice(-20)}`, "index_id");
     const existing = this.store.find("codebase_index", indexId);
-    if (existing) { if (existing.identity_digest !== stableDigest(identity)) throw new Error("Codebase index idempotency conflict"); return { index: this.indexStatus(existing, workspace), idempotent: true }; }
+    if (existing) {
+      if (existing.identity_digest !== stableDigest(identity)) throw new Error("Codebase index idempotency conflict");
+      if (existing.graph_storage === PROJECT_GRAPH_STORAGE && this.store.ownerRecords)
+        throw new Error("Codebase graph index was persisted in project storage and must be rebuilt");
+      return { index: this.indexStatus(existing, workspace), idempotent: true };
+    }
     const nodes: Node[] = input.nodes.map((raw) => {
       const item = raw as JsonObject; const path = text(item.path, "node.path"); const file = fileAt(path);
       if (item.source_digest !== file.digest) throw new Error(`Analysis source digest mismatch: ${path}`);
@@ -843,7 +850,11 @@ export class CodebaseIndexKernel {
     return new ProjectGraphStore(String(workspace.root_path), String(workspace.id), this.store.paths);
   }
   private graphRecord(index: JsonObject, kind: "codebase_index_shard" | "codebase_index_edge_route", id: string): JsonObject {
-    return index.graph_storage === PROJECT_GRAPH_STORAGE && !this.store.ownerRecords ? this.projectGraphStore(index).read(id) : this.store.get(kind, id);
+    if (index.graph_storage === PROJECT_GRAPH_STORAGE) {
+      if (this.store.ownerRecords) throw new Error("Codebase graph index was persisted in project storage and must be rebuilt");
+      return this.projectGraphStore(index).read(id);
+    }
+    return this.store.get(kind, id);
   }
   private persistIndex(identity: JsonObject, indexId: string, sourceFileCount: number, analysis: JsonObject,
     rawNodes: readonly Node[], rawEdges: readonly Edge[], diagnostics: readonly JsonObject[], guard?: IndexPublicationGuard): JsonObject {
@@ -1010,8 +1021,9 @@ export class CodebaseIndexKernel {
   private symbolSearch(index: JsonObject): CodeSymbolSearchIndex {
     const usage = codebaseUsageWeights(this.store, String(index.id));
     const shardIds = Array.isArray(index.node_shard_ids) ? index.node_shard_ids as string[] : [];
+    if (index.graph_storage === PROJECT_GRAPH_STORAGE && this.store.ownerRecords) throw new Error("Codebase graph index was persisted in project storage and must be rebuilt");
     const payloadDigest = shardIds.length
-      ? index.graph_storage === PROJECT_GRAPH_STORAGE && !this.store.ownerRecords ? this.projectGraphStore(index).recordsFingerprint(shardIds)
+      ? index.graph_storage === PROJECT_GRAPH_STORAGE ? this.projectGraphStore(index).recordsFingerprint(shardIds)
         : this.store.latestRecordsDigest("codebase_index_shard", shardIds)
       : stableDigest(Array.isArray(index.nodes) ? index.nodes : []);
     const fingerprint = stableDigest({ index_id: index.id, identity_digest: index.identity_digest, node_digest: index.node_digest,
@@ -1084,7 +1096,10 @@ export class CodebaseIndexKernel {
   }
   private impactDependencyDigest(index: JsonObject, dependencies: ImpactDependencies): string {
     const routes = [...dependencies.routes].sort(), shards = [...dependencies.shards].sort();
-    if (index.graph_storage === PROJECT_GRAPH_STORAGE && !this.store.ownerRecords) return this.projectGraphStore(index).recordsDigest([...routes, ...shards]);
+    if (index.graph_storage === PROJECT_GRAPH_STORAGE) {
+      if (this.store.ownerRecords) throw new Error("Codebase graph index was persisted in project storage and must be rebuilt");
+      return this.projectGraphStore(index).recordsDigest([...routes, ...shards]);
+    }
     return stableDigest({ routes: this.store.latestRecordsDigest("codebase_index_edge_route", routes),
       shards: this.store.latestRecordsDigest("codebase_index_shard", shards) });
   }

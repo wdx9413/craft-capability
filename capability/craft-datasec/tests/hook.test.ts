@@ -254,17 +254,13 @@ test("pending tokens can be flushed when an existing vault already holds other m
 });
 
 
-test("SessionEnd dispatch deletes only its Host session and reports invalid identity", () => {
+test("session mappings remain available for a resumed session", () => {
   const f = fixture();
   try {
-    for (const host of ["claude", "codex"] as const) {
-      run(host, "PostToolUse", {tool_response: PHONE}, f.root);
-    }
-    assert.deepEqual(run("codex", "SessionEnd", {}, f.root), {});
-    assert(!existsSync(sessionDirectory(join(f.root, "codex"), "fixture-session")));
-    assert(existsSync(sessionDirectory(join(f.root, "claude"), "fixture-session")));
-    assert.deepEqual(run("codex", "SessionEnd", {}, f.root), {});
-    assert.deepEqual(run("codex", "SessionEnd", {session_id:""}, f.root), {systemMessage: FAILURE});
-    assert.deepEqual(run("codex", "SessionEnd", {session_id:undefined}, f.root), {systemMessage: FAILURE});
+    run("codex", "PostToolUse", {tool_response: PHONE}, f.root);
+    const directory = sessionDirectory(join(f.root, "codex"), "fixture-session");
+    assert.equal(existsSync(directory), true);
+    assert.deepEqual(run("codex", "UserPromptSubmit", { prompt: "resume" }, f.root), {});
+    assert.equal(existsSync(directory), true);
   } finally { f.close(); }
 });

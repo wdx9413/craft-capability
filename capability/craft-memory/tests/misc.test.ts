@@ -36,6 +36,7 @@ test("ownership declares the narrow write surface and the wider projection", () 
   assert.equal(MEMORY_CONTEXT_SOURCE, "craft_memory");
   assert.equal(MEMORY_OWNS.test("craft_memory_ledger_remember"), true);
   assert.equal(MEMORY_OWNS.test("craft_memory_decay_get"), true);
+  assert.equal(MEMORY_OWNS.test("craft_memory_recall"), false);
   assert.equal(MEMORY_OWNS.test("craft_context_resolution"), false);
   assert.equal(MEMORY_COMPONENT.test("craft_memory_ledger_remember"), true);
   assert.equal(MEMORY_COMPONENT.test("craft_knowledge_source_register"), true);

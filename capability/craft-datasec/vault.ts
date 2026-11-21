@@ -48,7 +48,7 @@ function publish(directory: string, name: string, value: Buffer | string): void 
 export class TokenVault {
   private readonly directory: string;
   private readonly key: Buffer;
-  private readonly database: DatabaseSync | undefined;
+  private database: DatabaseSync | undefined;
   private readonly cache = new Map<string, string>();
   private readonly pending = new Map<string, { name: string; value: string }>();
   private closed = false;
@@ -68,9 +68,16 @@ export class TokenVault {
     const file = join(this.directory, "mappings.sqlite");
     if (existsSync(file)) {
       closeSync(openPrivate(file));
-      this.database = new DatabaseSync(file, { readOnly: true });
-      try { this.database.prepare("SELECT token, name, value FROM mappings LIMIT 0").all(); }
-      catch (error) { this.database.close(); throw error; }
+      const database = new DatabaseSync(file, { readOnly: true });
+      try {
+        database.exec("PRAGMA busy_timeout=1500;");
+        const mappings = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mappings'").get();
+        if (mappings) {
+          database.prepare("SELECT token, name, value FROM mappings LIMIT 0").all();
+          this.database = database;
+        } else database.close();
+      }
+      catch (error) { database.close(); throw error; }
     }
   }
 
@@ -105,6 +112,7 @@ export class TokenVault {
   }
 
   token(name: string, value: string): string {
+    this.assertOpen();
     const cacheKey = `${name}\0${value}`;
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
@@ -116,6 +124,7 @@ export class TokenVault {
   }
   /** Immutable authenticated files are safe to publish concurrently and retry. */
   flush(): void {
+    this.assertOpen();
     for (const [token, record] of this.pending) {
       this.publishMapping(token, record);
       this.pending.delete(token);
@@ -129,6 +138,10 @@ export class TokenVault {
       this.key.fill(0);
       this.closed = true;
     }
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("Vault is closed");
   }
 
   /** Session-end cleanup removes the mapping and key together. */
@@ -145,10 +158,11 @@ export class TokenVault {
     const directory = join(root, createHash("sha256").update(session).digest("hex"));
     if (!existsSync(directory)) return;
     if (!isPrivateDirectory(lstatSync(directory))) throw new Error("Unsafe vault directory");
-    rmSync(directory, { recursive: true });
+    rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 
   restore(text: string): string {
+    this.assertOpen();
     const restored = text.replace(TOKEN, token => {
       const record = this.pending.get(token) ?? this.readMapping(token);
       if (!record) throw new Error("Unknown mapping");

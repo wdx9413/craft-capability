@@ -252,6 +252,16 @@ export class MemoryLedgerKernel {
    * between scopes where a different policy applies.
    */
   transition(args: JsonObject): JsonObject {
+    return this.transitionWithAccess(args, true);
+  }
+
+  /** Internal lifecycle transitions bypass reader visibility so expiry and approved governance can close records. */
+  transitionForGovernance(args: JsonObject): JsonObject {
+    if (!["expired", "revoked", "superseded"].includes(String(args.status))) throw new Error("Governance Memory transition status is unsupported");
+    return this.transitionWithAccess({ ...args, actor: args.actor ?? "system:memory-governance" }, false);
+  }
+
+  private transitionWithAccess(args: JsonObject, enforceVisibility: boolean): JsonObject {
     const memoryId = text(args.memory_id, "memory_id"); const status = text(args.status, "status");
     if (!MEMORY_STATUS.has(status) || status === "active") throw new Error("Memory status is unsupported");
     const replacementId = args.replacement_id === undefined ? null : text(args.replacement_id, "replacement_id");
@@ -261,7 +271,7 @@ export class MemoryLedgerKernel {
     const actor = args.actor === undefined ? null : boundedActor(args.actor, "actor");
     const result = this.store.transaction(() => {
       const memory = this.store.get("memory_ledger", memoryId);
-      if (!this.visible(memory, optionalScope(args), scopeAccess(args), args.allow_restricted === true)) throw new Error("Memory scope or audience denied");
+      if (enforceVisibility && !this.visible(memory, optionalScope(args), scopeAccess(args), args.allow_restricted === true)) throw new Error("Memory scope or audience denied");
       if (status === "superseded") {
         if (!replacementId) throw new Error("Superseded Memory requires replacement_id");
         const replacement = this.store.get("memory_ledger", replacementId);

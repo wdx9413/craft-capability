@@ -168,7 +168,7 @@ export class MemoryGovernanceKernel {
         const previous = this.store.get("memory_ledger", memoryId);
         if (previous.status !== "active") return previous;
         const scope = previous.scope as JsonObject;
-        return this.ledger.transition({ memory_id: previous.id, scope_kind: scope.kind, scope_id: scope.id,
+        return this.ledger.transitionForGovernance({ memory_id: previous.id, scope_kind: scope.kind, scope_id: scope.id,
           status: "superseded", replacement_id: memory.id, reason: `superseded by ${memory.id}` }).memory as JsonObject;
       });
       const saved = this.store.save("memory_candidate", String(candidate.id), { ...payload(candidate), ledger_memory_id: memory.id, status: "approved" });
@@ -243,7 +243,7 @@ export class MemoryGovernanceKernel {
     const remaining = limit - expired.length;
     if (remaining > 0) {
       const memories = this.store.list("memory_ledger", 10_000, (x) => Boolean(x.status === "active" && x.valid_until && Date.parse(String(x.valid_until)) < now.valueOf()));
-      for (const memory of memories.slice(0, remaining)) expired.push(this.ledger.transition({ memory_id: memory.id, status: "expired", reason: "valid_until elapsed" }).memory as JsonObject);
+      for (const memory of memories.slice(0, remaining)) expired.push(this.ledger.transitionForGovernance({ memory_id: memory.id, status: "expired", reason: "valid_until elapsed" }).memory as JsonObject);
     }
     return { expired, count: expired.length, limit, now: now.toISOString() };
   }
