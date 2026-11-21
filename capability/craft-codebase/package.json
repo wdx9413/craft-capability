@@ -151,7 +151,7 @@
   "license": "MIT",
   "types": "./dist/capability.d.ts",
   "dependencies": {
-    "craft-common-store-local": "0.21.0",
+    "craft-common-store-local": "0.21.1",
     "craft-common-base": "0.20.5",
     "craft-common-log": "0.20.13"
   },

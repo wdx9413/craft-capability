@@ -24,8 +24,8 @@ importers:
         specifier: 0.20.13
         version: 0.20.13
       craft-common-store-local:
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.21.1
+        version: 0.21.1
     devDependencies:
       typescript:
         specifier: '>=5.8 <7'
@@ -46,8 +46,8 @@ importers:
         specifier: 0.20.7
         version: 0.20.7
       craft-common-store-local:
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.21.1
+        version: 0.21.1
 
   capability/craft-datasec:
     devDependencies:
@@ -70,14 +70,14 @@ importers:
         specifier: 0.20.7
         version: 0.20.7
       craft-common-store-local:
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.21.1
+        version: 0.21.1
 
   capability/craft-knowledge:
     dependencies:
       '@craft/capability-memory':
-        specifier: 0.20.9
-        version: 0.20.9
+        specifier: 0.20.10
+        version: 0.20.10
       craft-common-base:
         specifier: 0.20.5
         version: 0.20.5
@@ -88,8 +88,8 @@ importers:
         specifier: 0.20.7
         version: 0.20.7
       craft-common-store-local:
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.21.1
+        version: 0.21.1
 
   capability/craft-memory:
     dependencies:
@@ -103,8 +103,8 @@ importers:
         specifier: 0.20.7
         version: 0.20.7
       craft-common-store-local:
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.21.1
+        version: 0.21.1
 
   capability/craft-notes:
     dependencies:
@@ -112,8 +112,8 @@ importers:
         specifier: 0.20.5
         version: 0.20.5
       craft-common-store-local:
-        specifier: 0.21.0
-        version: 0.21.0
+        specifier: 0.21.1
+        version: 0.21.1
 
 packages:
 
@@ -121,8 +121,8 @@ packages:
     resolution: {integrity: sha512-bP/BdDgM0Dn99p6X/AYf71k8hjw4g0mX6zYnYrRABWQrmtmVe1jp2+bpRuRE8hqnNCU1hVMbIBQQe8Mta60k9w==}
     engines: {node: '>=23'}
 
-  '@craft/capability-memory@0.20.9':
-    resolution: {integrity: sha512-8lgB+R7K7McmTR7F/lzpSTkTOhdXr/KbTjVc2Hg+MkNv6Zs32bCbP7NOMWHpdpYzrU6g0c8mVUXlm5uhGv3bsQ==}
+  '@craft/capability-memory@0.20.10':
+    resolution: {integrity: sha512-M0lsrchjg1hkZ02zbkGCHDF6OVkRKCaLAp4ZXzvwjIxhQZMmpeu6b7DYIL/jR+sC+kiqfsENx9DYYaqaL/7m4A==}
     engines: {node: '>=23'}
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -296,8 +296,8 @@ packages:
     resolution: {integrity: sha512-hP/ZKl/59LdHdsY87doLL8s7LUSlvDjw/1Goz0cmILha07VoaCoDzbh4Fv8OJeb+IcIouGNEMd99stVJrzMmkg==}
     engines: {node: '>=23'}
 
-  craft-common-store-local@0.21.0:
-    resolution: {integrity: sha512-297Tr62Evyw0JnG31DS7uvFH9tiMXaiwWU2xngwcqOXxYpobhqfBbcrRwS5mPn/E+AjY8xVWnLEbz5IfYuS4AQ==}
+  craft-common-store-local@0.21.1:
+    resolution: {integrity: sha512-Tvz3QRZnF4CTBVrSpf1I4RXKvdf8qmgoISOdvqA/ynSD1LQKBOltRYUb6gwOeTgzl+UEmsTxFs4I7SgqzsjJUQ==}
     engines: {node: '>=23'}
 
   esbuild@0.28.2:
@@ -317,18 +317,18 @@ snapshots:
 
   '@craft/capability-knowledge@0.20.9':
     dependencies:
-      '@craft/capability-memory': 0.20.9
+      '@craft/capability-memory': 0.20.10
       craft-common-base: 0.20.5
       craft-common-log: 0.20.13
       craft-common-ontology: 0.20.7
-      craft-common-store-local: 0.21.0
+      craft-common-store-local: 0.21.1
 
-  '@craft/capability-memory@0.20.9':
+  '@craft/capability-memory@0.20.10':
     dependencies:
       craft-common-base: 0.20.5
       craft-common-log: 0.20.13
       craft-common-ontology: 0.20.7
-      craft-common-store-local: 0.21.0
+      craft-common-store-local: 0.21.1
 
   '@esbuild/aix-ppc64@0.28.2':
     optional: true
@@ -414,16 +414,16 @@ snapshots:
 
   craft-common-base@0.20.5:
     dependencies:
-      craft-common-store-local: 0.21.0
+      craft-common-store-local: 0.21.1
 
   craft-common-log@0.20.13:
     dependencies:
       craft-common-base: 0.20.5
-      craft-common-store-local: 0.21.0
+      craft-common-store-local: 0.21.1
 
   craft-common-ontology@0.20.7: {}
 
-  craft-common-store-local@0.21.0: {}
+  craft-common-store-local@0.21.1: {}
 
   esbuild@0.28.2:
     optionalDependencies:

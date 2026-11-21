@@ -6,9 +6,9 @@ autoInstallPeers: false
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - 'craft-common-store-local@0.21.0'
+  - 'craft-common-store-local@0.21.1'
   - 'craft-common-base@0.20.5'
   - 'craft-common-log@0.20.13'
   - 'craft-common-ontology@0.20.7'
-  - '@craft/capability-memory@0.20.9'
+  - '@craft/capability-memory@0.20.10'
   - '@craft/capability-knowledge@0.20.9'
