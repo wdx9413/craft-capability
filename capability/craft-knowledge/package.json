@@ -106,7 +106,7 @@
   "license": "MIT",
   "types": "./dist/capability.d.ts",
   "dependencies": {
-    "@craft/capability-memory": "0.20.9",
+    "@craft/capability-memory": "0.20.10",
     "craft-common-base": "0.20.5",
     "craft-common-log": "0.20.13",
     "craft-common-ontology": "0.20.7",
