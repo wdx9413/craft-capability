@@ -286,11 +286,32 @@ export class MemoryFileStore {
     const page = this.store.listSessionMemoryPage(kind, scope.id, "", 500);
     if (!page.records.length) break;
     if (kind !== "memory_ledger") {
-      for (let offset = 0; offset < page.records.length; offset += 50) {
-        const batch = page.records.slice(offset, offset + 50);
-        this.store.transaction(() => { for (const record of batch) this.store.remove(kind, String(record.id)); });
+      const pendingJobs = this.pendingPromotionJobs(scope.id).filter(job => {
+        const candidate = this.store.find("memory_candidate", String(job.candidate_id), undefined, false);
+        if (candidate?.status === "approved") return true;
+        this.store.save("memory_observation_promotion", String(job.id), { ...job, status: "rejected",
+          reason: candidate ? "candidate_not_approved_before_session_archive" : "candidate_unavailable", completed_at: new Date().toISOString() });
+        return false;
+      });
+      const pendingCandidateIds = new Set(pendingJobs.map(job => String(job.candidate_id)));
+      const pendingIntentIds = new Set(pendingJobs.map(job => String(job.intent_id)));
+      let cleanupCursor = "";
+      let removedCount = 0;
+      for (;;) {
+        const cleanupPage = this.store.listSessionMemoryPage(kind, scope.id, cleanupCursor, 500);
+        const removable = cleanupPage.records.filter(record => !(kind === "memory_candidate" && pendingCandidateIds.has(String(record.id)))
+          && !(kind === "memory_observation_intent" && pendingIntentIds.has(String(record.id))));
+        for (let offset = 0; offset < removable.length; offset += 50) {
+          const batch = removable.slice(offset, offset + 50);
+          this.store.transaction(() => { for (const record of batch) this.store.remove(kind, String(record.id)); });
+          removedCount += batch.length;
+        }
+        pages++;
+        if (pages >= pageBudget && cleanupPage.has_more) return pending(prior);
+        if (!cleanupPage.has_more) break;
+        cleanupCursor = cleanupPage.next_cursor!;
       }
-      if (++pages >= pageBudget) return pending(prior);
+      if (removedCount === 0) break;
       continue;
     }
     for (const memory of page.records) {
@@ -329,13 +350,38 @@ export class MemoryFileStore {
     // cleanup until after the write guard releases. A session Memory directory
     // also holds the guard's `.memory-write-lock.db`, and Windows refuses to
     // delete a directory while that SQLite handle is still open.
+    const pendingPromotionCount = this.pendingPromotionJobs(scope.id).length;
     this.store.closeMemoryScope(scope);
     if (host) this.store.closeContextScope(scope);
-    const archived = this.store.save("memory_session_archive", archiveId, { status: "archived", session_digest: sessionDigest,
-      memory_count: prior.memory_count, candidate_count: prior.candidate_count, confirmation_count: prior.confirmation_count, content_deleted: true, archived_at: new Date().toISOString() });
-    this.store.appendEvent("memory-session", "memory.session_archived", { session_digest: sessionDigest, memory_count: prior.memory_count, candidate_count: prior.candidate_count, content_deleted: true });
-    const cleanup: SessionArchiveCleanup = { directory, legacyDirectory, legacyOwned, sessionScopeId: parsed ? null : scope.id, hostMounted: Boolean(host) };
-    return { archived: { ...archived, content_deleted: true, idempotent: false }, cleanup };
+    const archived = this.store.save("memory_session_archive", archiveId, { status: "archived", session_scope_id: scope.id, session_digest: sessionDigest,
+      memory_count: prior.memory_count, candidate_count: prior.candidate_count, confirmation_count: prior.confirmation_count,
+      content_deleted: pendingPromotionCount === 0, promotion_content_retained: pendingPromotionCount > 0,
+      pending_promotion_count: pendingPromotionCount, archived_at: new Date().toISOString() });
+    this.store.appendEvent("memory-session", "memory.session_archived", { session_digest: sessionDigest, memory_count: prior.memory_count,
+      candidate_count: prior.candidate_count, content_deleted: pendingPromotionCount === 0, pending_promotion_count: pendingPromotionCount });
+    const cleanup: SessionArchiveCleanup = { directory, legacyDirectory, legacyOwned, sessionScopeId: parsed ? null : scope.id,
+      hostMounted: Boolean(host), preserveMemoryDirectory: pendingPromotionCount > 0 };
+    return { archived: { ...archived, content_deleted: pendingPromotionCount === 0, idempotent: false }, cleanup };
+  }
+
+  /** Remove the retained session candidate database once its asynchronous Memory work is terminal. */
+  releaseArchivedPromotionContent(sessionId: string): boolean {
+    if (typeof sessionId !== "string" || !sessionId.trim()) throw new Error("session_id must not be empty");
+    const scopeId = this.store.resolveSessionStorageScopeId(sessionId.trim());
+    const archiveId = sessionArchiveId(scopeId);
+    const archive = this.store.find("memory_session_archive", archiveId);
+    if (archive?.status !== "archived" || archive.promotion_content_retained !== true) return false;
+    if (this.pendingPromotionJobs(scopeId).length > 0) return false;
+    const directory = this.store.sessionStorageRoot(scopeId);
+    this.store.closeMemoryScope({ kind: "session", id: scopeId });
+    removeDirectoryTolerant(join(directory, "memory"));
+    this.store.save("memory_session_archive", archiveId, { ...archive, content_deleted: true, promotion_content_retained: false,
+      pending_promotion_count: 0, promotion_content_released_at: new Date().toISOString() });
+    return true;
+  }
+
+  private pendingPromotionJobs(scopeId: string): JsonObject[] {
+    return this.store.list("memory_observation_promotion", 10_000, job => job.session_scope_id === scopeId && (job.status === "pending" || job.status === "processing"));
   }
 }
 
@@ -347,6 +393,7 @@ interface SessionArchiveCleanup {
   readonly sessionScopeId: string | null;
   /** Whether a Host was bound, which also mounted the Context directory for cleanup. */
   readonly hostMounted: boolean;
+  readonly preserveMemoryDirectory: boolean;
 }
 
 /**
@@ -364,7 +411,7 @@ function removeDirectoryTolerant(path: string): void {
 /** Delete a session's on-disk Memory/Context after the write guard has released its SQLite lock. */
 function runArchiveDirectoryCleanup(cleanup: SessionArchiveCleanup): void {
   if (cleanup.hostMounted) removeDirectoryTolerant(join(cleanup.directory, "context"));
-  removeDirectoryTolerant(join(cleanup.directory, "memory"));
+  if (!cleanup.preserveMemoryDirectory) removeDirectoryTolerant(join(cleanup.directory, "memory"));
   if (cleanup.legacyOwned) removeDirectoryTolerant(cleanup.legacyDirectory);
   if (cleanup.sessionScopeId !== null && isLegacySafeSessionId(cleanup.sessionScopeId)) {
     const legacyDirect = legacyDirectSessionDirectory(cleanup.sessionScopeId);

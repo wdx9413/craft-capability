@@ -5,7 +5,7 @@
 ## Rules
 
 - A device can be registered only with a user supplied Device Note. A disabled device can be re-enabled only after it has a confirmed Device Note.
-- Directory and File Notes begin as candidates. Three distinct completed tasks across at least two Host sessions in a rolling 30-day window qualify a candidate; an explicit pin can also create one. Neither path confirms it automatically.
+- Directory and File Notes begin as pending candidates. A Notes-owned asynchronous qualification run rechecks device identity and usage evidence: three distinct completed tasks across at least two Host sessions in a rolling 30-day window, or an explicit pin. Qualification only makes the candidate eligible for human review; it never confirms it.
 - File references are caller supplied. The capability never opens or reads a file. Optional size and modification time are review hints; missing remote metadata is recorded as `path_only`.
 - Only confirmed Notes and migrated promoted legacy entries enter default retrieval. Revoked Notes stay out of retrieval.
 - Credential-like note text is rejected. Notes are scoped by device, project and exact path.
@@ -26,6 +26,8 @@ const candidate = notes.observeDirectory({
   session_id: "codex-session-9",
   outcome: "completed",
 });
+// A durable worker may run this after the Host returns. It returns status and IDs only.
+const qualification = notes.qualifyCandidates({ limit: 50 });
 // A human must confirm the exact candidate before it is recalled by default.
 ```
 

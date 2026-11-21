@@ -1,6 +1,6 @@
 {
   "name": "@craft/capability-memory",
-  "version": "0.20.9",
+  "version": "0.20.10",
   "description": "Craft Memory capability: the scoped, Source-pinned, Evidence-checked Memory Ledger",
   "type": "module",
   "main": "./dist/capability.js",

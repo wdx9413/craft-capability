@@ -1,4 +1,5 @@
 import type { JsonObject } from 'craft-common-store-local/store';
+import { randomUUID } from 'node:crypto';
 import { digestJson } from 'craft-common-base/digest';
 import { text } from 'craft-common-base/validation';
 import { sessionStorageScopeId } from 'craft-common-store-local/paths';
@@ -74,46 +75,159 @@ export class MemoryCapture {
         || digestJson(existingEvidence.metadata) !== digestJson(evidenceInput.metadata))) throw new Error("Memory capture evidence idempotency conflict");
       return existingEvidence ?? this.evidenceRecord(evidenceInput);
     });
-    let evidenceVersionBound = false;
+    const proposed = this.memory.propose({ candidate_id: String(args.candidate_id ?? `memory_candidate_statement_${suffix}`), source_id: "builtin.evidence-wiki", kind,
+      scope_kind: scopeKind, scope_id: scopeId, ...(args.scope_envelope === undefined ? {} : { scope_envelope: args.scope_envelope }), ...(topic === undefined ? {} : { topic }), content, sensitivity: args.sensitivity ?? "internal", confidence: "bounded",
+      proposal_only: hints.length > 0, evidence_ids: [evidence.id], proposed_by: proposedBy, valid_until: args.valid_until,
+      ...(args.memory_id === undefined ? {} : { memory_id: args.memory_id }) });
     if (scopeKind === "session" && args.project_scope_id) {
       const intentId = `memory_observation_intent_${suffix}`;
       const intent = {
         scope: { kind: "session", id: scopeId }, project_id: text(args.project_scope_id, "project_scope_id"), capture_digest: digestJson(captureIdentity),
         candidate_id: String(args.candidate_id ?? `memory_candidate_statement_${suffix}`), content_digest: digestJson(content), kind, topic: topic ?? "", capture_topic: topic ?? null, evidence_id: evidence.id, evidence_version: evidence.version, content_free: true,
+        promotion_status: "pending",
       };
       const existing = this.memory.store.find("memory_observation_intent", intentId);
       if (existing && existing.evidence_version === undefined && !legacyFieldAbsent(this.memory.store, "memory_observation_intent", existing, "evidence_version")) throw new Error("Memory observation intent evidence version was removed");
-      if (existing && Object.entries(intent).some(([key, value]) => !(key === "evidence_version" && existing[key] === undefined) && digestJson(existing[key]) !== digestJson(value))) throw new Error("Memory observation intent idempotency conflict");
+      if (existing && Object.entries(intent).some(([key, value]) => key !== "promotion_status" && !(key === "evidence_version" && existing[key] === undefined) && digestJson(existing[key]) !== digestJson(value))) throw new Error("Memory observation intent idempotency conflict");
       if (!existing) this.memory.store.create("memory_observation_intent", intentId, intent);
-      evidenceVersionBound = !existing || existing.evidence_version !== undefined;
+      const jobId = this.observationPromotionJobId(intentId);
+      const jobIdentity = { intent_id: intentId, candidate_id: intent.candidate_id, project_id: intent.project_id,
+        session_scope_id: scopeId, capture_digest: intent.capture_digest, status: "pending", content_free: true };
+      const existingJob = this.memory.store.find("memory_observation_promotion", jobId);
+      if (existingJob && Object.entries(jobIdentity).some(([key, value]) => key !== "status" && digestJson(existingJob[key]) !== digestJson(value))) throw new Error("Memory promotion job idempotency conflict");
+      if (!existingJob) this.memory.store.create("memory_observation_promotion", jobId, jobIdentity);
     }
-    const proposed = this.memory.propose({ candidate_id: String(args.candidate_id ?? `memory_candidate_statement_${suffix}`), source_id: "builtin.evidence-wiki", kind,
-      scope_kind: scopeKind, scope_id: scopeId, ...(args.scope_envelope === undefined ? {} : { scope_envelope: args.scope_envelope }), ...(topic === undefined ? {} : { topic }), content, sensitivity: args.sensitivity ?? "internal", confidence: "bounded",
-      proposal_only: hints.length > 0, evidence_ids: [evidence.id], proposed_by: proposedBy, valid_until: args.valid_until,
-      ...(args.memory_id === undefined ? {} : { memory_id: args.memory_id }) });
     const retainedCandidate = proposed.candidate as JsonObject;
     if (proposed.idempotent === true && retainedCandidate.ledger_memory_id) {
       const retained = this.memory.ledger.get({ ...args, scope_kind: scopeKind, scope_id: scopeId, memory_id: retainedCandidate.ledger_memory_id }).memory as JsonObject;
       if (retained.status === "active") {
-        const promotions = scopeKind === "session" && args.project_scope_id
-          ? this.promoteRepeatedFact({ sessionId: scopeId, projectId: text(args.project_scope_id, "project_scope_id"), projectRoot: typeof args.project_root === "string" ? args.project_root : undefined, candidate: retainedCandidate, ...(evidenceVersionBound ? { evidence } : {}) })
-          : [];
-        return { ...proposed, memory: retained, evidence, promotions, already_retained: true, auto_committed: false, next_action: "available_for_scoped_context" };
+        return { ...proposed, memory: retained, evidence, promotions: [], already_retained: true, auto_committed: false,
+          next_action: scopeKind === "session" && Boolean(args.project_scope_id) ? "memory_promotion_queued" : "available_for_scoped_context" };
       }
     }
     if (hints.length > 0) return { ...proposed, evidence, topic_suggestions: hints, auto_committed: false, next_action: "confirm_topic_or_explicit_replacement" };
     // Governed policy can already approve and commit; neither deny that fact nor commit twice.
     if (proposed.auto_committed === true) {
-      const promotions = scopeKind === "session" && args.project_scope_id
-        ? this.promoteRepeatedFact({ sessionId: scopeId, projectId: text(args.project_scope_id, "project_scope_id"), projectRoot: typeof args.project_root === "string" ? args.project_root : undefined, candidate: proposed.candidate as JsonObject, ...(evidenceVersionBound ? { evidence } : {}) })
-        : [];
       const memoryFile = this.memory.ledger.files.sync({ kind: scopeKind, id: scopeId }, typeof args.project_root === "string" ? args.project_root : undefined);
-      return { ...proposed, evidence, memory_file: memoryFile, promotions, next_action: "available_for_scoped_context" };
+      return { ...proposed, evidence, memory_file: memoryFile, promotions: [],
+        next_action: scopeKind === "session" && Boolean(args.project_scope_id) ? "memory_promotion_queued" : "available_for_scoped_context" };
     }
     const candidate = proposed.candidate as JsonObject;
     return { ...proposed, evidence, auto_committed: false,
       next_action: candidate.status === "conflict_pending" ? "resolve_conflict" : "review_or_accept" };
   }
+
+  /** Process durable Host-observation intents using Memory's own evidence and tier gates. */
+  processObservedPromotions(args: JsonObject = {}): JsonObject {
+    this.bootstrap();
+    const limit = args.limit === undefined ? 50 : Number(args.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("limit must be an integer between 1 and 500");
+    const projectId = args.project_scope_id === undefined ? undefined : text(args.project_scope_id, "project_scope_id");
+    for (const archive of this.memory.store.list("memory_session_archive", 10_000, row => row.status === "archived" && row.promotion_content_retained === true).slice(0, limit)) {
+      if (typeof archive.session_scope_id === "string") this.memory.ledger.files.releaseArchivedPromotionContent(archive.session_scope_id);
+    }
+    const eligibleJobs = this.memory.store.list("memory_observation_promotion", 10_000, job =>
+      (job.status === "pending" || job.status === "processing" && Date.parse(String(job.lease_expires_at ?? "")) <= Date.now())
+      && (!projectId || job.project_id === projectId));
+    const jobs = eligibleJobs.slice(0, limit);
+    const items: JsonObject[] = [];
+    for (const candidateJob of jobs) {
+      const claimId = randomUUID();
+      const job = this.memory.store.transaction(() => {
+        const current = this.memory.store.find("memory_observation_promotion", String(candidateJob.id));
+        if (!current || (current.status !== "pending" && !(current.status === "processing" && Date.parse(String(current.lease_expires_at ?? "")) <= Date.now()))) return null;
+        return this.memory.store.save("memory_observation_promotion", String(current.id), { ...current, status: "processing", claim_id: claimId,
+          claimed_at: new Date().toISOString(), lease_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), attempts: Number(current.attempts ?? 0) + 1 });
+      });
+      if (!job) continue;
+      const intent = this.memory.store.find("memory_observation_intent", String(job.intent_id), undefined, false);
+      const candidateId = text(job.candidate_id, "candidate_id");
+      const finish = (status: string, reason?: string, promotions: JsonObject[] = []) => {
+        const savedJob = this.memory.store.transaction(() => {
+          const current = this.memory.store.find("memory_observation_promotion", String(job.id));
+          if (!current || current.status !== "processing" || current.claim_id !== claimId) throw new Error("Memory promotion claim was superseded");
+          const saved = this.memory.store.save("memory_observation_promotion", String(job.id), { ...current, status, claim_id: null, lease_expires_at: null,
+            ...(reason ? { reason } : {}), ...(promotions.length ? { promotion_tiers: promotions.map(row => row.tier) } : {}), completed_at: new Date().toISOString() });
+          const currentIntent = this.memory.ledger.files.isSessionArchived(String(job.session_scope_id)) ? null
+            : this.memory.store.find("memory_observation_intent", String(job.intent_id));
+          if (currentIntent) this.memory.store.save("memory_observation_intent", String(job.intent_id), { ...currentIntent, promotion_status: status,
+            promotion_reason: reason ?? null, promoted_at: new Date().toISOString() });
+          return saved;
+        });
+        this.releaseArchivedCandidate(job);
+        items.push({ work_id: savedJob.id, candidate_id: candidateId, status,
+          ...(reason ? { reason } : {}), promotions: promotions.map(row => ({ tier: row.tier, status: row.status, auto_committed: row.auto_committed === true,
+            ...(typeof row.reason_code === "string" ? { reason_code: row.reason_code } : {}),
+            ...(Number.isSafeInteger(row.repetition_count) ? { repetition_count: row.repetition_count } : {}) })) });
+      };
+      const defer = (reason: string, errorType?: string) => {
+        this.memory.store.transaction(() => {
+          const current = this.memory.store.find("memory_observation_promotion", String(job.id));
+          if (!current || current.status !== "processing" || current.claim_id !== claimId) return;
+          this.memory.store.save("memory_observation_promotion", String(job.id), { ...current, status: "pending", claim_id: null, lease_expires_at: null,
+            reason, ...(errorType ? { last_error_type: errorType } : {}), last_attempted_at: new Date().toISOString() });
+        });
+        items.push({ work_id: job.id, candidate_id: candidateId, status: "waiting", reason, ...(errorType ? { error_type: errorType } : {}) });
+      };
+      if (!intent) { finish("rejected", "intent_unavailable"); continue; }
+      const candidate = this.memory.store.find("memory_candidate", candidateId, undefined, false);
+      if (!candidate || candidate.status !== "approved") {
+        if (!candidate || ["rejected", "expired", "superseded"].includes(String(candidate.status))) {
+          finish("rejected", candidate ? `candidate_${candidate.status}` : "candidate_unavailable");
+          continue;
+        }
+        defer(candidate?.status === "conflict_pending" ? "conflict_pending" : "awaiting_session_commit");
+        continue;
+      }
+      if (typeof candidate.valid_until === "string" && Date.parse(candidate.valid_until) < Date.now()) {
+        finish("rejected", "candidate_expired");
+        continue;
+      }
+      const scope = candidate.scope as JsonObject | undefined;
+      if (scope?.kind !== "session" || scope.id !== job.session_scope_id || scope.id !== (intent.scope as JsonObject | undefined)?.id
+        || candidate.content_digest !== intent.content_digest || candidate.kind !== intent.kind
+        || (candidate.topic ?? "") !== intent.topic || !Array.isArray(candidate.evidence_ids) || !candidate.evidence_ids.includes(intent.evidence_id as string)) {
+        finish("rejected", "candidate_identity_changed");
+        continue;
+      }
+      const evidence = this.memory.store.find("evidence", String(intent.evidence_id));
+      const captureIdentity = { kind: intent.kind, scope_kind: "session", scope_id: scope.id, project_scope_id: intent.project_id, topic: intent.capture_topic, content_digest: intent.content_digest };
+      if (!evidence || digestJson(captureIdentity) !== intent.capture_digest
+        || (intent.evidence_version !== undefined && evidence.version !== intent.evidence_version)
+        || (evidence.metadata as JsonObject | undefined)?.capture_digest !== intent.capture_digest) {
+        finish("rejected", "evidence_changed_or_unavailable");
+        continue;
+      }
+      const policy = this.memory.policyGet().policy as JsonObject;
+      if (policy.mode !== "governed") {
+        defer(policy.mode === "off" ? "memory_disabled" : "governed_policy_required");
+        continue;
+      }
+      let promotions: JsonObject[];
+      try {
+        promotions = this.promoteRepeatedFact({ sessionId: String(scope.id), projectId: String(intent.project_id),
+          projectRoot: projectId && projectId === intent.project_id && typeof args.project_root === "string" ? args.project_root : undefined, candidate, evidence });
+      } catch (error) {
+        defer("promotion_gate_unavailable", error instanceof Error ? error.name : "unknown");
+        continue;
+      }
+      finish(promotions.some(row => row.auto_committed === true) ? "promoted" : "observed", undefined, promotions);
+    }
+    const promoted = items.reduce((count, item) => count + (Array.isArray(item.promotions)
+      ? (item.promotions as JsonObject[]).filter(row => row.auto_committed === true).length : 0), 0);
+    return { processed: items.filter(item => item.status === "promoted" || item.status === "observed" || item.status === "rejected").length,
+      promoted,
+      pending: this.memory.store.list("memory_observation_promotion", 10_000, job => job.status === "pending" && (!projectId || job.project_id === projectId)).length,
+      has_more: eligibleJobs.length > jobs.length, items };
+  }
+
+  private releaseArchivedCandidate(job: JsonObject): void {
+    const scopeId = String(job.session_scope_id ?? "");
+    if (!scopeId) return;
+    this.memory.ledger.files.releaseArchivedPromotionContent(scopeId);
+  }
+
+  private observationPromotionJobId(intentId: string): string { return `memory_observation_promotion_${digestJson(intentId).slice(-32)}`; }
 
 
   private promoteRepeatedFact(input: { sessionId: string; projectId: string; projectRoot?: string; candidate: JsonObject; evidence?: JsonObject }): JsonObject[] {

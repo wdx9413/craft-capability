@@ -62,6 +62,7 @@ async function fixture(options: { sharedEvidence?: boolean; invalidScope?: boole
       return capture.captureObservedFact({ session_id: "session-current", project_scope_id: "project-current", content,
         sensitivity: options.sensitivity ?? "internal" });
     },
+    archive() { return ledger.files.archiveSession("session-current"); },
     async close() { store.close(); await rm(root, { recursive: true, force: true }); },
     promote() {
       return (capture as unknown as { promoteRepeatedFact(input: JsonObject): JsonObject[] }).promoteRepeatedFact({
@@ -94,8 +95,9 @@ test("Memory capture auto-promotion rejects identifiers, non-shareable sensitivi
   for (const item of cases) {
     const f = await fixture(item.options);
     try {
-      const captured = f.captureObserved() as JsonObject;
-      const global = (captured.promotions as JsonObject[]).find(row => row.tier === "global")!;
+      f.captureObserved();
+      const processed = f.capture.processObservedPromotions({ project_scope_id: "project-current" }) as JsonObject;
+      const global = ((processed.items as JsonObject[]).flatMap(row => row.promotions as JsonObject[] ?? [])).find(row => row.tier === "global")!;
       assert.equal(global.status, "rejected");
       assert.equal(global.auto_committed, false);
       assert.equal(global.reason_code, item.reason);
@@ -104,10 +106,80 @@ test("Memory capture auto-promotion rejects identifiers, non-shareable sensitivi
   }
   const f = await fixture();
   try {
-    const captured = f.captureObserved() as JsonObject;
-    const global = (captured.promotions as JsonObject[]).find(row => row.tier === "global")!;
+    f.captureObserved();
+    const processed = f.capture.processObservedPromotions({ project_scope_id: "project-current" }) as JsonObject;
+    const global = ((processed.items as JsonObject[]).flatMap(row => row.promotions as JsonObject[] ?? [])).find(row => row.tier === "global")!;
     assert.equal(global.auto_committed, true);
     assert.equal(f.store.list("memory_ledger", 100, row => (row.scope as JsonObject).kind === "global").length, 1);
+  } finally { await f.close(); }
+});
+
+test("observed Memory capture queues promotion for idempotent asynchronous processing", async () => {
+  const f = await fixture();
+  try {
+    const captured = f.captureObserved() as JsonObject;
+    assert.deepEqual(captured.promotions, []);
+    assert.equal(captured.next_action, "memory_promotion_queued");
+    const first = f.capture.processObservedPromotions() as JsonObject;
+    const second = f.capture.processObservedPromotions({ project_scope_id: "project-current" }) as JsonObject;
+    assert.equal(first.processed, 1);
+    assert.equal(first.promoted, 1);
+    assert.equal(second.processed, 0);
+    assert.equal(second.promoted, 0);
+    assert.equal(f.store.list("memory_ledger", 100, row => (row.scope as JsonObject).kind === "global").length, 1);
+  } finally { await f.close(); }
+});
+
+test("Memory promotion reclaims an expired processing lease without duplicating the observation", async () => {
+  const f = await fixture();
+  try {
+    f.captureObserved();
+    const job = f.store.list("memory_observation_promotion", 10)[0]!;
+    f.store.save("memory_observation_promotion", String(job.id), { ...job, status: "processing", claim_id: "dead-worker",
+      lease_expires_at: "2000-01-01T00:00:00.000Z", attempts: 1 });
+    const result = f.capture.processObservedPromotions() as JsonObject;
+    assert.equal(result.processed, 1);
+    assert.equal(result.promoted, 1);
+    const completed = f.store.find("memory_observation_promotion", String(job.id))!;
+    assert.equal(completed.status, "promoted");
+    assert.equal(completed.attempts, 2);
+    assert.equal(f.store.list("memory_observation", 10, row => row.project_id === "project-current").length, 3);
+  } finally { await f.close(); }
+});
+
+test("session archive retains the minimum approved Memory candidate until the worker observes it", async () => {
+  const f = await fixture();
+  try {
+    f.captureObserved();
+    const archived = f.archive() as JsonObject;
+    assert.equal(archived.content_deleted, false);
+    assert.equal(archived.promotion_content_retained, true);
+    assert.equal(archived.pending_promotion_count, 1);
+    assert.equal(f.store.listSessionMemoryPage("memory_observation_intent", "session-current", "", 500).records.filter(row => row.promotion_status === "pending").length, 1);
+    assert.equal(f.store.listSessionMemoryPage("memory_candidate", "session-current", "", 500).records.filter(row => row.status === "approved").length, 1);
+    const processed = f.capture.processObservedPromotions({ project_scope_id: "project-current" }) as JsonObject;
+    assert.equal(processed.processed, 1);
+    const cleaned = f.archive() as JsonObject;
+    assert.equal(cleaned.content_deleted, true);
+    assert.equal(cleaned.promotion_content_retained, false);
+    assert.equal(f.store.list("memory_observation", 10, row => row.project_id === "project-current").length, 3);
+  } finally { await f.close(); }
+});
+
+test("archived Memory work releases retained content after Evidence is revoked", async () => {
+  const f = await fixture();
+  try {
+    const captured = f.captureObserved() as JsonObject;
+    f.archive();
+    const evidence = captured.evidence as JsonObject;
+    f.store.save("evidence", String(evidence.id), { ...evidence, confidence: "unverified" });
+    const processed = f.capture.processObservedPromotions({ project_scope_id: "project-current" }) as JsonObject;
+    const item = (processed.items as JsonObject[])[0]!;
+    assert.equal(item.status, "rejected");
+    assert.equal(item.reason, "evidence_changed_or_unavailable");
+    const cleaned = f.archive() as JsonObject;
+    assert.equal(cleaned.content_deleted, true);
+    assert.equal(cleaned.promotion_content_retained, false);
   } finally { await f.close(); }
 });
 

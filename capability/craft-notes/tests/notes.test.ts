@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
 import { CraftNotesRegistry, noteSeedText } from "../craft-note-lifecycle.ts";
+import { CraftNotesLocationRegistry } from "../craft-notes-location.ts";
 import { openStore } from "./store.ts";
 
 async function fixture(): Promise<Awaited<ReturnType<typeof openStore>> & { notes: CraftNotesRegistry }> {
@@ -42,14 +43,17 @@ test("disabled devices need a note before reactivation and keep their disabled s
     assert.equal(disabled.status, "confirmed");
     assert.equal(f.store.find("device", "laptop")!.status, "disabled");
     assert.throws(() => f.notes.createDevice({ id: "laptop", status: "active" }), /non-empty/u);
-    const reactivated = f.notes.createDevice({ id: "laptop", note: "x", status: "active" });
-    assert.equal(reactivated.text, "x");
+    assert.throws(() => f.notes.createDevice({ id: "laptop", note: "x", status: "active" }), /setDeviceStatus/u);
+    const location = new CraftNotesLocationRegistry(f.store);
+    const reactivated = location.setDeviceStatus("laptop", "active");
+    assert.equal(reactivated.status, "active");
     assert.equal(f.store.find("device", "laptop")!.status, "active");
     f.notes.createDevice({ id: "laptop", note: "再次停用", status: "disabled" });
     const stillDisabled = f.notes.createDevice({ id: "laptop", note: "仍停用" });
     assert.equal(f.store.find("device", "laptop")!.status, "disabled");
-    assert.equal(stillDisabled.version, 4);
-    const enabled = f.notes.createDevice({ id: "laptop", note: "重新启用", status: "active" });
+    assert.equal(stillDisabled.version, Number(f.store.find("craft_note", stillDisabled.id)!.version));
+    location.setDeviceStatus("laptop", "active");
+    const enabled = f.notes.createDevice({ id: "laptop", note: "重新启用" });
     assert.equal(f.store.find("device", "laptop")!.status, "active");
     assert.equal(enabled.text, "重新启用");
   } finally {
@@ -103,19 +107,26 @@ test("usage evidence gates candidate promotion and ignores revoked entries", asy
     const path = "/work/app";
     const first = f.notes.observeDirectory({ path, device_id: "local", task_id: "t1", session_id: "s1", outcome: "completed" });
     assert.equal(first.eligible, false);
-    assert.equal(first.reason, "insufficient_independent_usage");
+    assert.equal(first.reason, "awaiting_async_qualification");
     assert.equal(first.session_count, 1);
+    const pending = first.note as { id: string; version: number };
+    assert.throws(() => f.notes.confirm({ id: pending.id, expected_version: pending.version }), /asynchronous qualification/u);
     assert.throws(() => f.notes.observeDirectory({ path, device_id: "local", task_id: "t2" }), /usage evidence/u);
     assert.throws(() => f.notes.observeDirectory({ path, device_id: "local", task_id: "t2", session_id: "s2", outcome: "failed" }), /usage evidence/u);
     f.notes.observeDirectory({ path, device_id: "local", task_id: "t2", session_id: "s1", outcome: "completed" });
     const third = f.notes.observeDirectory({ path, device_id: "local", task_id: "t3", session_id: "s2", outcome: "completed" });
-    assert.equal(third.eligible, true);
-    assert.equal(third.reason, "threshold_met_review_required");
+    assert.equal(third.eligible, false);
+    assert.equal(third.reason, "awaiting_async_qualification");
+    const qualification = f.notes.qualifyCandidates();
+    assert.equal(qualification.qualified, 1);
+    assert.equal(qualification.items[0]!.status, "qualified");
+    assert.equal("text" in qualification.items[0]!, false);
     const note = third.note as { id: string; status: string; version: number };
     assert.equal(note.status, "candidate");
     assert.equal(f.notes.candidateList({ device_id: "local" }).items.length, 1);
     assert.equal(f.notes.candidateList({ device_id: "other" }).items.length, 0);
-    const confirmed = f.notes.confirm({ id: note.id, expected_version: note.version });
+    const reviewCandidate = f.notes.list({ status: "candidate" }).items.find(item => item.id === note.id)!;
+    const confirmed = f.notes.confirm({ id: note.id, expected_version: reviewCandidate.version });
     assert.equal(confirmed.status, "confirmed");
     assert.throws(() => f.notes.confirm({ id: note.id, expected_version: note.version }), /stale Note/u);
     const confirmedAgain = f.notes.confirm({ id: note.id, expected_version: confirmed.version, note: "reviewed text" });
@@ -133,19 +144,269 @@ test("usage evidence gates candidate promotion and ignores revoked entries", asy
   }
 });
 
+test("Notes qualification is durable, idempotent and never confirms a candidate", async () => {
+  const f = await fixture();
+  try {
+    const args = { path: "/work/async", device_id: "local", task_id: "task-1", session_id: "session-1", outcome: "completed" };
+    const first = f.notes.observeDirectory(args);
+    const firstNote = first.note as { id: string; version: number; status: string };
+    const retry = f.notes.observeDirectory(args);
+    assert.equal((retry.note as { version: number }).version, firstNote.version);
+    f.notes.observeDirectory({ ...args, task_id: "task-2", session_id: "session-1" });
+    f.notes.observeDirectory({ ...args, task_id: "task-3", session_id: "session-2" });
+    const current = f.notes.list({ status: "candidate" }).items.find(item => item.id === firstNote.id)!;
+
+    const qualified = f.notes.qualifyCandidates({ limit: 1 });
+    assert.deepEqual(qualified, {
+      processed: 1,
+      qualified: 1,
+      waiting: 0,
+      rejected: 0,
+      items: [{ note_id: firstNote.id, status: "qualified", reason: "threshold_met_review_required" }],
+    });
+    assert.equal(f.store.find("craft_note", firstNote.id)!.qualification_status, "qualified");
+    assert.equal(f.store.find("craft_note", firstNote.id)!.status, "candidate");
+    assert.equal(f.notes.resolve({ path: "/work/async" }).items.some(item => item.id === firstNote.id), false);
+
+    const again = f.notes.qualifyCandidates();
+    assert.equal(again.processed, 0);
+    const duplicate = f.notes.observeDirectory(args);
+    assert.equal(duplicate.eligible, false);
+    assert.equal(duplicate.duplicate, true);
+    const reviewCandidate = f.notes.list({ status: "candidate" }).items.find(item => item.id === firstNote.id)!;
+    assert.ok(reviewCandidate.version > current.version);
+    assert.equal(f.notes.confirm({ id: firstNote.id, expected_version: reviewCandidate.version }).status, "confirmed");
+  } finally {
+    await f.close();
+  }
+});
+
+test("duplicate observations on legacy candidates tolerate missing evidence lists", async () => {
+  const f = await fixture();
+  try {
+    const args = { path: "/work/legacy-candidate", task_id: "task-legacy", session_id: "session-legacy", outcome: "completed" };
+    const observed = f.notes.observeDirectory(args).note as { id: string };
+    f.store.save("craft_note", observed.id, { ...f.store.find("craft_note", observed.id), evidence_refs: null });
+    const retried = f.notes.observeDirectory(args);
+    assert.equal(retried.evidence_count, 0);
+    assert.equal((retried.note as { status: string }).status, "candidate");
+  } finally {
+    await f.close();
+  }
+});
+
+test("reusing an observation id with different note or scope data is a conflict", async () => {
+  const f = await fixture();
+  try {
+    const args = { path: "/work/intent", device_id: "local", task_id: "intent-task", session_id: "intent-session", outcome: "completed", note: "first note", project_id: "project:first" };
+    const first = f.notes.observeDirectory(args);
+    assert.equal((first.note as { text: string }).text, "first note");
+    assert.throws(() => f.notes.observeDirectory({ ...args, note: "different note" }), (error: unknown) =>
+      error instanceof Error && (error as Error & { code?: string }).code === "CRAFT_NOTES_OBSERVATION_CONFLICT");
+    assert.throws(() => f.notes.observeDirectory({ ...args, project_id: "project:other" }), /different input/u);
+    assert.equal((f.store.find("craft_note", (first.note as { id: string }).id)!.text), "first note");
+    assert.equal(f.store.list("craft_note_usage", 100, row => row.subject_key === "local:/work/intent").length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("event creation and candidate write commit atomically across duplicate observers", async () => {
+  const f = await fixture();
+  const originalSave = f.store.save.bind(f.store);
+  try {
+    const args = { path: "/work/atomic", device_id: "local", task_id: "atomic-task", session_id: "atomic-session", outcome: "completed" };
+    let failCandidateWrite = true;
+    f.store.save = ((kind: string, id: string, payload: Record<string, unknown>, version?: number) => {
+      const saved = originalSave(kind, id, payload as never, version);
+      if (failCandidateWrite && kind === "craft_note" && payload.subject_key === "local:/work/atomic") {
+        failCandidateWrite = false;
+        throw new Error("candidate write failed");
+      }
+      return saved;
+    }) as typeof f.store.save;
+    assert.throws(() => f.notes.observeDirectory(args), /candidate write failed/u);
+    assert.equal(f.store.list("craft_note_usage", 100, row => row.subject_key === "local:/work/atomic").length, 0);
+    assert.equal(f.store.list("craft_note", 100, row => row.subject_key === "local:/work/atomic").length, 0);
+
+    f.store.save = originalSave;
+    const otherObserver = new CraftNotesRegistry(f.store);
+    const results = await Promise.all([
+      Promise.resolve().then(() => f.notes.observeDirectory(args)),
+      Promise.resolve().then(() => otherObserver.observeDirectory(args)),
+    ]);
+    assert.equal(results.filter(result => result.duplicate === true).length, 1);
+    assert.equal(f.store.list("craft_note_usage", 100, row => row.subject_key === "local:/work/atomic").length, 1);
+    assert.equal(f.store.list("craft_note", 100, row => row.subject_key === "local:/work/atomic").length, 1);
+  } finally {
+    f.store.save = originalSave;
+    await f.close();
+  }
+});
+
+test("confirmed and revoked transitions serialize with an expected-version check", async () => {
+  const f = await fixture();
+  try {
+    const note = f.notes.resolve({ device_id: "local" }).items[0]!;
+    const competing = new CraftNotesRegistry(f.store);
+    const outcomes = await Promise.allSettled([
+      Promise.resolve().then(() => f.notes.confirm({ id: note.id, expected_version: note.version })),
+      Promise.resolve().then(() => competing.revoke({ id: note.id, expected_version: note.version, revoked_by: "worker", reason: "concurrent decision" })),
+    ]);
+    assert.equal(outcomes.filter(result => result.status === "fulfilled").length, 1);
+    assert.equal(outcomes.filter(result => result.status === "rejected").length, 1);
+    const current = f.store.find("craft_note", note.id)!;
+    assert.equal(Number(current.version), note.version + 1);
+    assert.ok(current.status === "confirmed" || current.status === "revoked");
+  } finally {
+    await f.close();
+  }
+});
+
+test("confirm and revoke roll back state when storage fails after the write", async () => {
+  const f = await fixture();
+  const originalSave = f.store.save.bind(f.store);
+  try {
+    const note = f.notes.resolve({ device_id: "local" }).items[0]!;
+    let fail = true;
+    f.store.save = ((kind: string, id: string, payload: Record<string, unknown>, version?: number) => {
+      const saved = originalSave(kind, id, payload as never, version);
+      if (fail && kind === "craft_note" && id === note.id) {
+        fail = false;
+        throw new Error("injected storage failure");
+      }
+      return saved;
+    }) as typeof f.store.save;
+
+    assert.throws(() => f.notes.revoke({ id: note.id, expected_version: note.version, revoked_by: "worker", reason: "failure" }), /injected storage failure/u);
+    const afterFailure = f.store.find("craft_note", note.id)!;
+    assert.equal(afterFailure.status, "confirmed");
+    assert.equal(Number(afterFailure.version), note.version);
+
+    fail = true;
+    assert.throws(() => f.notes.confirm({ id: note.id, expected_version: note.version }), /injected storage failure/u);
+    const afterConfirmFailure = f.store.find("craft_note", note.id)!;
+    assert.equal(afterConfirmFailure.status, "confirmed");
+    assert.equal(Number(afterConfirmFailure.version), note.version);
+  } finally {
+    f.store.save = originalSave;
+    await f.close();
+  }
+});
+
+test("expired qualifications require async review and refresh the review window", async () => {
+  const f = await fixture();
+  try {
+    const note = f.notes.observeDirectory({ path: "/work/qualification-expiry", pin: true }).note as { id: string };
+    f.notes.qualifyCandidates();
+    const stale = f.store.find("craft_note", note.id)!;
+    const expiredAt = new Date(Date.now() - 31 * 86400000).toISOString();
+    f.store.save("craft_note", note.id, { ...stale, qualified_at: expiredAt, qualification_checked_at: expiredAt });
+    const beforeConfirm = f.store.find("craft_note", note.id)!;
+    assert.throws(() => f.notes.confirm({ id: note.id, expected_version: beforeConfirm.version }), /qualification has expired/u);
+
+    assert.equal(f.notes.qualifyCandidates().qualified, 1);
+    const refreshed = f.store.find("craft_note", note.id)!;
+    assert.ok(Date.parse(String(refreshed.qualified_at)) > Date.parse(expiredAt));
+    assert.equal(f.notes.confirm({ id: note.id, expected_version: refreshed.version }).status, "confirmed");
+  } finally {
+    await f.close();
+  }
+});
+
+test("rejected candidates wait for their review window before policy recheck", async () => {
+  const opened = await openStore();
+  let blocked = false;
+  const notes = new CraftNotesRegistry(opened.store, value => {
+    if (blocked && value === "candidate") throw new Error("policy denied");
+  });
+  try {
+    notes.createDevice({ id: "local", note: "device" });
+    const note = notes.observeDirectory({ path: "/work/rejected-window", pin: true, note: "candidate" }).note as { id: string };
+    blocked = true;
+    assert.equal(notes.qualifyCandidates().rejected, 1);
+    const rejected = opened.store.find("craft_note", note.id)!;
+    assert.equal(notes.qualifyCandidates().processed, 0);
+    assert.equal(Number(opened.store.find("craft_note", note.id)!.version), Number(rejected.version));
+
+    blocked = false;
+    const expiredAt = new Date(Date.now() - 31 * 86400000).toISOString();
+    opened.store.save("craft_note_qualification_cursor", note.id, {
+      ...opened.store.find("craft_note_qualification_cursor", note.id), checked_at: expiredAt,
+    });
+    assert.equal(notes.qualifyCandidates().qualified, 1);
+    assert.equal(opened.store.find("craft_note", note.id)!.qualification_status, "qualified");
+  } finally {
+    await opened.close();
+  }
+});
+
+test("Notes qualification waits when device identity is no longer valid", async () => {
+  const f = await fixture();
+  try {
+    const candidate = f.notes.observeDirectory({ path: "/work/device-changed", pin: true, device_id: "local" }).note as { id: string; version: number };
+    f.notes.createDevice({ id: "local", note: "设备停用", status: "disabled" });
+    const result = f.notes.qualifyCandidates();
+    assert.deepEqual(result.items, [{ note_id: candidate.id, status: "waiting", reason: "device_identity_unavailable" }]);
+    assert.equal(f.store.find("craft_note", candidate.id)!.status, "candidate");
+    assert.equal(f.store.find("craft_note", candidate.id)!.qualification_status, "waiting");
+    const waitingVersion = Number(f.store.find("craft_note", candidate.id)!.version);
+    const firstCheckedAt = String(f.store.find("craft_note_qualification_cursor", candidate.id)!.checked_at);
+    assert.equal(f.notes.qualifyCandidates().waiting, 1);
+    assert.equal(Number(f.store.find("craft_note", candidate.id)!.version), waitingVersion);
+    assert.ok(String(f.store.find("craft_note_qualification_cursor", candidate.id)!.checked_at) >= firstCheckedAt);
+    f.store.save("craft_note", "missing-device", {
+      id: "missing-device", subject_type: "directory", subject_key: "unknown:/work", text: "unknown scope", status: "candidate",
+      qualification_status: "pending", created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    });
+    assert.equal(f.notes.qualifyCandidates().items.find(item => item.note_id === "missing-device")!.reason, "device_identity_unavailable");
+    f.store.save("device", "local", { ...f.store.find("device", "local"), status: "active" });
+    assert.equal(f.notes.qualifyCandidates().items.find(item => item.note_id === candidate.id)!.status, "qualified");
+    assert.throws(() => f.notes.qualifyCandidates({ limit: 0 }), /limit/u);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Notes qualification waits below threshold and rejects a candidate that fails current policy", async () => {
+  const opened = await openStore();
+  let blocked = false;
+  const notes = new CraftNotesRegistry(opened.store, value => {
+    if (blocked && value === "policy changed") throw new Error("policy denied");
+  });
+  try {
+    notes.createDevice({ id: "local", note: "device" });
+    const insufficient = notes.observeDirectory({ path: "/work/insufficient", task_id: "t1", session_id: "s1", outcome: "completed" });
+    const rejected = notes.observeDirectory({ path: "/work/rejected", pin: true, note: "policy changed" });
+    blocked = true;
+    const result = notes.qualifyCandidates();
+    assert.deepEqual(result.items.map(item => [item.status, item.reason]).sort(), [
+      ["rejected", "candidate_validation_failed"],
+      ["waiting", "insufficient_independent_usage"],
+    ]);
+    assert.equal(notes.resolve({ path: "/work/insufficient" }).items.some(item => item.id === (insufficient.note as { id: string }).id), false);
+    assert.equal(notes.resolve({ path: "/work/rejected" }).items.some(item => item.id === (rejected.note as { id: string }).id), false);
+    assert.equal("text" in result.items[1]!, false);
+  } finally {
+    await opened.close();
+  }
+});
+
 test("pinned directory notes bypass usage evidence and keep their own text", async () => {
   const f = await fixture();
   try {
     const pinned = f.notes.observeDirectory({ path: "/work/pinned", device_id: "local", pin: true, note: "pinned note", project_id: "p1" });
-    assert.equal(pinned.eligible, true);
-    assert.equal(pinned.reason, "pinned_review_required");
+    assert.equal(pinned.eligible, false);
+    assert.equal(pinned.reason, "awaiting_async_qualification");
     assert.equal(pinned.evidence_count, 0);
     const note = pinned.note as { id: string; text: string; project_id: string; version: number; subject_type: string };
     assert.equal(note.text, "pinned note");
     assert.equal(note.project_id, "p1");
     assert.equal(note.subject_type, "directory");
+    assert.equal(f.notes.qualifyCandidates().items[0]!.reason, "pinned_review_required");
+    const qualified = f.notes.list({ status: "candidate" }).items.find(item => item.id === note.id)!;
     const again = f.notes.observeDirectory({ path: "/work/pinned", device_id: "local", pin: true });
-    assert.equal((again.note as { version: number }).version, note.version + 1);
+    assert.equal((again.note as { version: number }).version, qualified.version + 1);
     const unnamed = f.notes.observeDirectory({ path: "/work/unnamed", device_id: "local", pin: true });
     assert.equal((unnamed.note as { text: string }).text, "unnamed");
     const explicit = f.notes.observeDirectory({ path: "/work/explicit", device_id: "local", pin: true, id: "custom-id" });
@@ -171,6 +432,7 @@ test("file references track metadata freshness and require artifact evidence", a
     const changed = f.notes.observeFileReference({ path, device_id: "local", pin: true, metadata: { size: 11, modified_at: "2026-01-02T00:00:00.000Z" } });
     assert.equal((changed.note as { freshness: string }).freshness, "needs_review");
     const note = changed.note as { id: string; version: number };
+    assert.equal(f.notes.qualifyCandidates().qualified, 1);
     const stored = f.store.find("craft_note", note.id)!;
     f.notes.confirm({ id: note.id, expected_version: Number(stored.version) });
     const afterConfirm = f.notes.observeFileReference({ path, device_id: "local", pin: true, metadata: { size: 12, modified_at: "2026-01-03T00:00:00.000Z" } });
@@ -191,9 +453,11 @@ test("resolve returns confirmed notes per device and path, and honours project s
   try {
     f.notes.createDevice({ id: "laptop", note: "笔记本" });
     const localNote = f.notes.observeDirectory({ path: "/work/app", device_id: "local", pin: true, project_id: "p1" }).note as { id: string; version: number };
-    f.notes.confirm({ id: localNote.id, expected_version: localNote.version });
+    f.notes.qualifyCandidates();
+    f.notes.confirm({ id: localNote.id, expected_version: Number(f.store.find("craft_note", localNote.id)!.version) });
     const laptopNote = f.notes.observeDirectory({ path: "/work/app", device_id: "laptop", pin: true, project_id: "p1" }).note as { id: string; version: number };
-    f.notes.confirm({ id: laptopNote.id, expected_version: laptopNote.version });
+    f.notes.qualifyCandidates();
+    f.notes.confirm({ id: laptopNote.id, expected_version: Number(f.store.find("craft_note", laptopNote.id)!.version) });
     const places = (query: Record<string, unknown>) => f.notes.resolve(query).items.filter(item => item.subject_type === "directory");
     assert.equal(places({ path: "/work/app" }).length, 1);
     assert.equal(places({ path: "/work/app" })[0]!.device_id, "local");
@@ -290,7 +554,7 @@ test("sparse and legacy rows take every documented default branch", async () => 
     assert.equal(f.notes.list({ limit: null }).items.length > 0, true);
     const legacyStore = new Map<string, Record<string, unknown>>([["legacy-note", {
       id: "legacy-note", subject_type: "device", subject_key: "legacy", text: "legacy",
-      status: "candidate", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
+      status: "confirmed", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
     }]]);
     const legacyNotes = new CraftNotesRegistry({
       find: (kind: string, id: string) => kind === "craft_note" ? legacyStore.get(id) ?? null : null,

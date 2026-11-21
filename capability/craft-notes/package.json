@@ -1,6 +1,6 @@
 {
   "name": "@craft/craft-notes",
-  "version": "0.20.8",
+  "version": "0.20.9",
   "description": "Craft Notes: an evolving registry of human-readable notes for directories across devices",
   "type": "module",
   "main": "./dist/index.js",
