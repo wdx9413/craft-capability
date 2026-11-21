@@ -58,7 +58,7 @@ export class ProcedureConfiguration {
       path => !this.store.rawRecords("experience_procedure").some(record => (record.payload.definition_ref as JsonObject | undefined)?.path === path));
       const entrypoints = kind === "graph" ? (contract.entries as JsonObject[]).map(entry => ({ ...entry, routes: (contract.subscenarios as JsonObject[]).filter(s => s.entry_id === entry.id).map(s => ({ exit_id: s.exit_id, subscenario_id: s.id })) })) : contract.entries;
       const data = { scope, scope_envelope: envelope, title, description: title, procedure_kind: kind, scenario_id: signature.scenario_id, scenario_signature: signature, author: "user", definition_ref: ref, definition_digest: ref.digest,
-        configuration_digest: digest, content_version: contentVersion, definition_revision: ref.digest, identity_digest: digest, content_digest: stableDigest(definition), entrypoints, exits: contract.exits,
+        configuration_digest: digest, candidate_version: Number(current?.version ?? 0) + 1, content_version: contentVersion, definition_revision: ref.digest, identity_digest: digest, content_digest: stableDigest(definition), entrypoints, exits: contract.exits,
         allowed_effects: effects, preconditions: [], trigger: title, failure_disposition: "checkpoint_and_handoff", acceptance_ref: `configuration:${id}`, evidence_ids: [],
         completed_gates: [], lifecycle: "candidate", routeable: false, publication_allowed: false, provenance: "user_configuration", template_id: current?.template_id ?? args.template_id ?? null, source_configuration_version: design.version };
       preserveProcedureRelease(this.store, current);

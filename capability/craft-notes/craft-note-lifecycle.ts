@@ -162,7 +162,7 @@ export class CraftNotesRegistry {
     const path = args.path === undefined ? null : absolutePath(args.path);
     return { items: this.store.list("craft_note", 1000, r => (r.status === "confirmed" || r.status === "legacy_unreviewed")
       && this.#deviceEnabled(String(r.device_id ?? "local")) && (device === null || r.device_id === device)
-      && (r.subject_type === "device" || project === null || r.project_id === project)
+      && (r.subject_type === "device" || project === null || r.project_id === undefined || r.project_id === project)
       && (r.subject_type === "device" ? (device === null ? r.device_id === "local" : r.device_id === device)
         : path !== null && r.subject_key === `${device ?? "local"}:${path}`)).map(noteRecord).slice(0, finiteLimit(args.limit)) };
   }

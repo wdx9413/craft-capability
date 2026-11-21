@@ -53,9 +53,13 @@ function scopeRef(value: string): { kind: string; id: string } {
 export class ProcedureStore {
   readonly store: CraftStore;
   readonly definitions: ProcedureDefinitionStore;
+  private programMemorySource: Pick<CraftStore, "get">;
+  setProgramMemorySource(source: Pick<CraftStore, "get">): void { this.programMemorySource = source; }
+  private evaluationSource: Pick<CraftStore, "get">;
+  setEvaluationContractSource(source: Pick<CraftStore, "get">): void { this.evaluationSource = source; }
   private evaluationVerifier: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject };
   constructor(store: CraftStore) {
-    this.store = store; this.definitions = new ProcedureDefinitionStore(store);
+    this.store = store; this.evaluationSource = store; this.programMemorySource = store; this.definitions = new ProcedureDefinitionStore(store);
     this.evaluationVerifier = new EvaluationContractKernel(store);
   }
 
@@ -270,7 +274,7 @@ export class ProcedureStore {
     const passed = args.passed === true;
     const programMemory = this.store.find("program_memory_procedure_binding", String(procedure.request_id));
     if (passed && programMemory) {
-      const candidate = this.store.get("program_memory_candidate", String(programMemory.candidate_id));
+      const candidate = this.programMemorySource.get("program_memory_candidate", String(programMemory.candidate_id));
       if ((candidate.status !== "submitted" && candidate.status !== "promoted") || candidate.digest !== programMemory.candidate_digest
         || candidate.request_id !== procedure.request_id || candidate.procedure_id !== procedure.id
         || candidate.procedure_candidate_version !== procedure.candidate_version) {
@@ -327,10 +331,10 @@ export class ProcedureStore {
   }
 
   private verifyProcedureEvaluation(procedure: JsonObject, contractId: string, evaluationId: string, prior?: JsonObject): JsonObject {
-    const contract = this.store.get("evaluation_contract", contractId);
+    const contract = this.evaluationSource.get("evaluation_contract", contractId);
     const programMemory = this.store.find("program_memory_procedure_binding", String(procedure.request_id));
     if (programMemory) {
-      const design = this.store.get("evaluation_contract", String(programMemory.design_id));
+      const design = this.evaluationSource.get("evaluation_contract", String(programMemory.design_id));
       const { candidate_ref: _candidateRef, ...taskEffectDesign } = (contract.task_effect ?? {}) as JsonObject;
       if (design.contract_digest !== programMemory.design_digest
         || stableDigest(contract.scope) !== stableDigest(programMemory.scope)
@@ -344,7 +348,16 @@ export class ProcedureStore {
     return procedureEvaluationBinding({ procedure, contract, evaluation: evaluation as never, evaluationId, ...(prior ? { prior } : {}) });
   }
 
-  plan(args: JsonObject): JsonObject { return new ProcedurePlanner(this.store).plan(args); }
+  plan(args: JsonObject): JsonObject {
+    const procedure = this.store.get("experience_procedure", text(args.procedure_id, "procedure_id"));
+    const binding = this.store.find("program_memory_procedure_binding", String(procedure.request_id));
+    if (binding) {
+      const candidate = this.programMemorySource.get("program_memory_candidate", String(binding.candidate_id));
+      if (!["submitted", "promoted"].includes(String(candidate.status)) || candidate.digest !== binding.candidate_digest)
+        throw new Error("Program Memory no longer authorizes this Procedure candidate");
+    }
+    return new ProcedurePlanner(this.store).plan(args);
+  }
 
   get(args: JsonObject): JsonObject {
     const id = text(args.procedure_id, "procedure_id");

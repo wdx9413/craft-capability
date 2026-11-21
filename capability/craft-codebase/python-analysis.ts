@@ -52,6 +52,9 @@ export function resolvePythonAnalyzerPath(cwd = process.cwd(), fileExists: (path
     try { return dirname(fileURLToPath(moduleUrl)); } catch { return null; }
   })();
   const moduleAnalyzer = moduleRoot ? [join(moduleRoot, "analyzers", "analyze-python.py"),
+    // Published packages keep analyzer resources beside dist/, while source
+    // workspaces keep them under capability/craft-codebase/analyzers.
+    join(moduleRoot, "..", "analyzers", "analyze-python.py"),
     join(moduleRoot, "..", "..", "..", "capability", "craft-codebase", "analyzers", "analyze-python.py")] : [];
   const candidates = [...moduleAnalyzer, join(dirname(entry), "..", "..", "scripts", "codebase", "analyze-python.py"),
     join(cwd, "scripts", "codebase", "analyze-python.py"),

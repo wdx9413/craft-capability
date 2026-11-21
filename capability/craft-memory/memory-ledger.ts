@@ -261,6 +261,7 @@ export class MemoryLedgerKernel {
     const actor = args.actor === undefined ? null : boundedActor(args.actor, "actor");
     const result = this.store.transaction(() => {
       const memory = this.store.get("memory_ledger", memoryId);
+      if (!this.visible(memory, optionalScope(args), scopeAccess(args), args.allow_restricted === true)) throw new Error("Memory scope or audience denied");
       if (status === "superseded") {
         if (!replacementId) throw new Error("Superseded Memory requires replacement_id");
         const replacement = this.store.get("memory_ledger", replacementId);

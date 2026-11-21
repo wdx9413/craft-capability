@@ -6,7 +6,7 @@ import { DOMAIN_ADAPTERS, buildDomainEvaluationSummary, prepareDomainAdapterCand
 import { CreationAdapter } from "./creation-adapter.ts";
 import { redact } from "craft-common-base/workflow";
 import { matchesEvolutionProjectScope, requireEvolutionProjectScope, type EvolutionProjectScope } from "./evolution-project-scope.ts";
-import { captureGovernedProgramMemory, independentProgramMemoryObservations, programMemorySubmission } from "./program-memory-governance.ts";
+import { captureGovernedProgramMemory, independentProgramMemoryObservations, programMemorySubmission, type ProgramMemorySources } from "./program-memory-governance.ts";
 
 export const RESEARCH_LAYERS = ["literature_fact", "experiment_observation", "interpretation"] as const;
 export type ResearchLayer = (typeof RESEARCH_LAYERS)[number];
@@ -90,6 +90,8 @@ const DEFAULT_ADAPTERS: Record<DomainAdapterName, Omit<DomainAdapterRecord, "dig
  */
 export class SelfEvolutionKernel {
   readonly store: CraftStore;
+  private programMemorySources: ProgramMemorySources = {};
+  configureProgramMemorySources(sources: ProgramMemorySources): void { this.programMemorySources = sources; }
   private readonly relations: KnowledgeRelationKernel;
   constructor(store: CraftStore) { this.store = store; this.relations = new KnowledgeRelationKernel(store); }
 
@@ -133,7 +135,7 @@ export class SelfEvolutionKernel {
     const scope = requireEvolutionProjectScope(args.scope);
     const steps = stringArray(args.steps).map(step => programMemoryProse(step, "step"));
     return captureGovernedProgramMemory(this.store, { ...args, statement, scenario_key: scenarioKey, domain, scope,
-      steps, evidence_ids: stringArray(args.evidence_ids) });
+      steps, evidence_ids: stringArray(args.evidence_ids) }, this.programMemorySources);
   }
 
   listProgramMemory(args: JsonObject): JsonObject {
@@ -152,20 +154,20 @@ export class SelfEvolutionKernel {
     if (candidate.scope_provenance === "project_binding" || typeof candidate.content_digest === "string") return true;
     // Old tools accepted caller-supplied scope. Until verified observations
     // establish ownership, retain the row for repair without exposing its prose.
-    return independentProgramMemoryObservations(this.store, stringArray(candidate.evidence_ids), scope, candidate.scenario_key).length > 0;
+    return independentProgramMemoryObservations(this.store, stringArray(candidate.evidence_ids), scope, candidate.scenario_key, this.programMemorySources).length > 0;
   }
 
   submitProgramMemory(id: string, scope?: JsonObject): JsonObject {
     const candidate = this.scopedProgramMemory(id, scope);
-    const { design, observations } = programMemorySubmission(this.store, candidate);
+    const { design, observations } = programMemorySubmission(this.store, candidate, this.programMemorySources);
     return { candidate, design, observations };
   }
 
   promoteProgramMemory(args: JsonObject): JsonObject {
     const candidate = this.scopedProgramMemory(text(args.id), args.scope);
     if (candidate.status !== "submitted" && candidate.status !== "promoted") throw new Error("program memory candidate is not submitted");
-    const procedure = this.store.find("experience_procedure", String(candidate.procedure_id));
-    const release = this.store.find("experience_release", String(candidate.procedure_id));
+    const procedure = (this.programMemorySources.observations ?? this.store).find("experience_procedure", String(candidate.procedure_id));
+    const release = (this.programMemorySources.observations ?? this.store).find("experience_release", String(candidate.procedure_id));
     if (!procedure || procedure.scope !== object(candidate.scope).id || procedure.request_id !== candidate.request_id
       || procedure.lifecycle !== "routeable" || procedure.routeable !== true || release?.status !== "active"
       || release.record_version !== procedure.version

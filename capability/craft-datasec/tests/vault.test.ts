@@ -77,26 +77,11 @@ test("restore rejects unknown, edited and malformed placeholders", () => {
   const vault = new TokenVault(root, "session-b");
   try {
     assert.throws(() => vault.restore("[CRAFT_DATASEC_phone_0123456789abcdef0123456789abcdef]"), /Unknown mapping/u);
-    const token = vault.token("phone", "13912345679");
+    const token = vault.token("phone", "synthetic-value");
     vault.flush();
-    const internals = vault as unknown as { pending: Map<string, { name: string; value: string }>; cache: Map<string, string>; database: { prepare(sql: string): { get(...args: unknown[]): unknown; run(...args: unknown[]): unknown } } };
-    internals.pending.clear();
-    assert.deepEqual({ ...(internals.database.prepare("SELECT name, value FROM mappings WHERE token = ?").get(token) as object) }, { name: "phone", value: "13912345679" });
-    assert.equal(vault.restore(token), "13912345679");
-    internals.cache.clear();
-    const fresh = vault.token("phone", "13800000001");
-    vault.flush();
-    internals.pending.clear();
-    const freshEdited = fresh.replace(/[a-f0-9](?=\])/u, fresh.at(-2) === "c" || fresh.at(-2) === "d" ? "e" : "c");
-    assert.notEqual(freshEdited, fresh);
-    const substitute = fresh.replace(/phone_[a-f0-9]{32}/u, `phone_${"f".repeat(32)}`);
-    const insert = internals.database.prepare("INSERT OR IGNORE INTO mappings VALUES (?, ?, ?)");
-    insert.run(substitute, "phone", "13800000001");
-    assert(internals.database.prepare("SELECT name, value FROM mappings WHERE token = ?").get(substitute));
-    assert.match(substitute, /^\[CRAFT_DATASEC_phone_f{32}\]$/u);
-    assert.notEqual(substitute, fresh);
-    const selected = internals.database.prepare("SELECT name, value FROM mappings WHERE token = ?").get(substitute);
-    assert.throws(() => vault.restore(substitute), /Invalid mapping/u);
+    assert.equal(vault.restore(token), "synthetic-value");
+    const forged = token.replace(/phone_[a-f0-9]{32}/u, `phone_${"f".repeat(32)}`);
+    assert.throws(() => vault.restore(forged), /Unknown mapping/u);
     assert.throws(() => vault.restore("[CRAFT_DATASEC_phone_broken"), /Unknown placeholder/u);
     assert.equal(vault.restore("no tokens here"), "no tokens here");
   } finally {
@@ -138,26 +123,20 @@ test("vault refuses unsafe key files and rolls back failed flushes", () => {
 
   const failureRoot = directory();
   const vault = new TokenVault(failureRoot, "session-d");
-  const database = (vault as unknown as { database: { prepare(sql: string): { run(...args: unknown[]): void } } }).database;
-  const originalPrepare = database.prepare;
-  const statement = database.prepare("SELECT 1");
+  const link = mock.method(fs, "linkSync", () => { throw new Error("disk full"); });
+  syncBuiltinESMExports();
   try {
-    let failInsert = false;
-    database.prepare = () => ({
-      run: () => {
-        if (failInsert) throw new Error("disk full");
-        statement.run();
-      },
-    });
-    const token = vault.token("phone", "13800000000");
-    failInsert = true;
+    const token = vault.token("fixture", "synthetic-value");
     assert.throws(() => vault.flush(), /disk full/u);
-    assert.equal(vault.restore(token), "13800000000");
+    assert.equal(vault.restore(token), "synthetic-value");
+    link.mock.restore(); syncBuiltinESMExports();
+    vault.flush();
+    assert.equal(vault.restore(token), "synthetic-value");
   } finally {
-    database.prepare = originalPrepare;
-    vault.close();
-    rmSync(failureRoot, { recursive: true, force: true });
+    link.mock.restore(); syncBuiltinESMExports();
+    vault.close(); rmSync(failureRoot, {recursive:true,force:true});
   }
+
 });
 
 test("file and publication errors close descriptors and surface the original failure", () => {
@@ -205,7 +184,7 @@ test("a corrupt mapping database is closed before the constructor rethrows", () 
     const vault = new TokenVault(root, "corrupt");
     vault.close();
     const database = join(root, createHash("sha256").update("corrupt").digest("hex"), "mappings.sqlite");
-    writeFileSync(database, "not a sqlite database");
+    writeFileSync(database, "not a sqlite database", { mode: 0o600 });
     assert.throws(() => new TokenVault(root, "corrupt"), /file is not a database|not a database/u);
   } finally {
     rmSync(root, { recursive: true, force: true });

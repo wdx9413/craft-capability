@@ -63,6 +63,10 @@ export class ExperienceLearningEvaluation {
     const definition = new ProcedureDefinitionStore(this.store).read(procedure.definition_ref);
     if (stableDigest(definition) !== procedure.definition_digest) throw new Error("Experience evaluation definition digest does not match the candidate");
     validateReadOnlyEvaluationSteps(definition.definition.steps);
+    const routes = Array.isArray(procedure.entrypoints) ? (procedure.entrypoints as JsonObject[]).flatMap(entry =>
+      (entry.routes as JsonObject[]).map(route => ({ entry_id: entry.id, exit_id: route.exit_id, ...(route.subscenario_id ? { subscenario_id: route.subscenario_id } : {}) }))) : [];
+    if (routes.length > 1) return { dispatch, status: "awaiting_adapter", reason: "composition_requires_individual_route_evaluation" };
+
     let baseline: { procedure: JsonObject; definition: ReturnType<ProcedureDefinitionStore["read"]> } | null = null;
     if (dispatch.stage === "canary" && dispatch.baseline_version !== null && dispatch.baseline_version !== undefined) {
       const current = currentForEvaluation(this.store, String(procedure.id));
@@ -126,6 +130,7 @@ export class ExperienceLearningEvaluation {
       case_environment_digests: runs.map(item => ({ candidate: item.environment_digest ?? null, baseline: item.baseline_environment_digest ?? null })), baseline_version: dispatch.baseline_version ?? null });
     const metadata: JsonObject = { experience_evaluation_dispatch_id: id, procedure_id: procedure.id, procedure_version: procedure.version,
       definition_digest: procedure.definition_digest, baseline_version: dispatch.baseline_version ?? null, stage,
+      ...(routes.length ? { procedure_definition_digest: procedure.definition_digest, ...routes[0] } : {}),
       evaluation_contract_digest: evaluationContractDigest,
       status: passed ? "passed" : "failed", evaluator_ref: "craft-read-only-workflow-evaluator.v1", environment_digest: environmentDigest,
       workflow_run_ids: runs.flatMap(item => typeof item.workflow_run_id === "string" ? [item.workflow_run_id] : []),

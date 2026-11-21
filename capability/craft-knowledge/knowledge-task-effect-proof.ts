@@ -1,6 +1,14 @@
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
 import { stableDigest } from 'craft-common-base/digest';
 
+type EvaluationDependencyReader = (id: string) => JsonObject | null;
+const evaluationReaders = new WeakMap<CraftStore, EvaluationDependencyReader>();
+
+/** The Host binds Eval's read port; Knowledge retains only exact dependency references. */
+export function bindKnowledgeTaskEffectEvaluationReader(store: CraftStore, reader: EvaluationDependencyReader): void {
+  evaluationReaders.set(store, reader);
+}
+
 export const KNOWLEDGE_TASK_EFFECT_POLICY = "craft.knowledge-task-effect.v1";
 export const knowledgeTaskEffectId = (run: JsonObject) => `knowledge_task_effect_${stableDigest({ id: run.id, version: run.version }).slice(-48)}`;
 export function knowledgeTaskEffectAssessmentDigest(receipt: JsonObject): string {
@@ -21,7 +29,8 @@ export function knowledgeTaskEffectProofVerified(store: CraftStore, run: JsonObj
     const ref = value as JsonObject;
     if (typeof ref.kind !== "string" || typeof ref.id !== "string" || seen.has(`${ref.kind}:${ref.id}`)) return false;
     seen.add(`${ref.kind}:${ref.id}`);
-    const record = store.find(ref.kind, ref.id, undefined, false);
+    const reader = ref.kind === "workbench_evaluation" ? evaluationReaders.get(store) : undefined;
+    const record = reader ? reader(ref.id) : store.find(ref.kind, ref.id, undefined, false);
     if (!record || record.version !== ref.version || stableDigest(record) !== ref.digest) return false;
   }
   return true;

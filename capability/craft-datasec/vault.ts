@@ -1,5 +1,5 @@
-import { createHash, createHmac, randomBytes } from "node:crypto";
-import { constants, closeSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { constants, closeSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -48,27 +48,62 @@ function publish(directory: string, name: string, value: Buffer | string): void 
 export class TokenVault {
   private readonly directory: string;
   private readonly key: Buffer;
-  private readonly database: DatabaseSync;
+  private readonly database: DatabaseSync | undefined;
   private readonly cache = new Map<string, string>();
   private readonly pending = new Map<string, { name: string; value: string }>();
   private closed = false;
-  constructor(root: string, session: string) {
+  constructor(root: string, session: string, host?: "claude" | "codex") {
     if (!session) throw new Error("Missing session identity");
     privateDirectory(root);
+    if (host !== undefined) {
+      if (host !== "claude" && host !== "codex") throw new Error("Invalid vault Host");
+      root = join(root, host);
+      privateDirectory(root);
+    }
     this.directory = join(root, createHash("sha256").update(session).digest("hex"));
     privateDirectory(this.directory);
     publish(this.directory, "key", randomBytes(32));
     this.key = readPrivate(join(this.directory, "key"));
     if (this.key.length !== 32) throw new Error("Invalid vault key");
     const file = join(this.directory, "mappings.sqlite");
-    closeSync(openPrivate(file, constants.O_CREAT | constants.O_RDWR));
-    this.database = new DatabaseSync(file);
-    try {
-      // Keep SQLite's rollback journal: changing journal_mode during simultaneous
-      // first opens can return SQLITE_BUSY before ordinary transaction retries.
-      this.database.exec("PRAGMA busy_timeout=1500; CREATE TABLE IF NOT EXISTS mappings (token TEXT PRIMARY KEY, name TEXT NOT NULL, value TEXT NOT NULL) STRICT;");
-    } catch (error) { this.database.close(); throw error; }
+    if (existsSync(file)) {
+      closeSync(openPrivate(file));
+      this.database = new DatabaseSync(file, { readOnly: true });
+      try { this.database.prepare("SELECT token, name, value FROM mappings LIMIT 0").all(); }
+      catch (error) { this.database.close(); throw error; }
+    }
   }
+
+  private filename(token: string): string {
+    return `${createHash("sha256").update(token).digest("hex")}.json`;
+  }
+
+  private readMapping(token: string): { name: string; value: string } | undefined {
+    const file = join(this.directory, this.filename(token));
+    if (!existsSync(file)) return this.database?.prepare("SELECT name, value FROM mappings WHERE token = ?").get(token) as { name: string; value: string } | undefined;
+    const record = JSON.parse(readPrivate(file).toString("utf8"));
+    if (record.schema !== "craft.datasec.mapping.v1" || typeof record.nonce !== "string"
+      || typeof record.ciphertext !== "string" || typeof record.tag !== "string") throw new Error("Invalid mapping envelope");
+    const decipher = createDecipheriv("aes-256-gcm", this.key, Buffer.from(record.nonce, "base64"));
+    decipher.setAAD(Buffer.from(token));
+    decipher.setAuthTag(Buffer.from(record.tag, "base64"));
+    const plaintext = Buffer.concat([decipher.update(Buffer.from(record.ciphertext, "base64")), decipher.final()]);
+    const value = JSON.parse(plaintext.toString("utf8"));
+    if (typeof value.name !== "string" || typeof value.value !== "string") throw new Error("Invalid mapping content");
+    return value;
+  }
+
+  private publishMapping(token: string, record: { name: string; value: string }): void {
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", this.key, nonce);
+    cipher.setAAD(Buffer.from(token));
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(record), "utf8"), cipher.final()]);
+    publish(this.directory, this.filename(token), JSON.stringify({ schema: "craft.datasec.mapping.v1",
+      nonce: nonce.toString("base64"), ciphertext: encrypted.toString("base64"), tag: cipher.getAuthTag().toString("base64") }));
+    const saved = this.readMapping(token);
+    if (saved?.name !== record.name || saved.value !== record.value) throw new Error("Mapping publication conflict");
+  }
+
   token(name: string, value: string): string {
     const cacheKey = `${name}\0${value}`;
     const cached = this.cache.get(cacheKey);
@@ -79,23 +114,43 @@ export class TokenVault {
     this.cache.set(cacheKey, token);
     return token;
   }
-  /** One transaction per hook output, rather than a filesystem write per occurrence. */
+  /** Immutable authenticated files are safe to publish concurrently and retry. */
   flush(): void {
-    if (!this.pending.size) return;
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      const insert = this.database.prepare("INSERT OR IGNORE INTO mappings VALUES (?, ?, ?)");
-      for (const [token, record] of this.pending) insert.run(token, record.name, record.value);
-      this.database.exec("COMMIT");
-      this.pending.clear();
-    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+    for (const [token, record] of this.pending) {
+      this.publishMapping(token, record);
+      this.pending.delete(token);
+    }
   }
   close(): void {
-    if (!this.closed) { this.database.close(); this.closed = true; }
+    if (!this.closed) {
+      this.database?.close();
+      this.pending.clear();
+      this.cache.clear();
+      this.key.fill(0);
+      this.closed = true;
+    }
   }
+
+  /** Session-end cleanup removes the mapping and key together. */
+  static removeSession(root: string, session: string, host?: "claude" | "codex"): void {
+    if (!session) throw new Error("Missing session identity");
+    if (!existsSync(root)) return;
+    if (!isPrivateDirectory(lstatSync(root))) throw new Error("Unsafe vault directory");
+    if (host !== undefined) {
+      if (host !== "claude" && host !== "codex") throw new Error("Invalid vault Host");
+      root = join(root, host);
+      if (!existsSync(root)) return;
+      if (!isPrivateDirectory(lstatSync(root))) throw new Error("Unsafe vault directory");
+    }
+    const directory = join(root, createHash("sha256").update(session).digest("hex"));
+    if (!existsSync(directory)) return;
+    if (!isPrivateDirectory(lstatSync(directory))) throw new Error("Unsafe vault directory");
+    rmSync(directory, { recursive: true });
+  }
+
   restore(text: string): string {
     const restored = text.replace(TOKEN, token => {
-      const record = this.pending.get(token) ?? this.database.prepare("SELECT name, value FROM mappings WHERE token = ?").get(token) as { name: string; value: string } | undefined;
+      const record = this.pending.get(token) ?? this.readMapping(token);
       if (!record) throw new Error("Unknown mapping");
       const expected = `[CRAFT_DATASEC_${record.name}_${createHmac("sha256", this.key).update(`${record.name}\0${record.value}`).digest("hex").slice(0, 32)}]`;
       if (expected !== token) throw new Error("Invalid mapping");

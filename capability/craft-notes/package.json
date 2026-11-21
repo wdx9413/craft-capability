@@ -1,6 +1,6 @@
 {
   "name": "@craft/craft-notes",
-  "version": "0.20.7",
+  "version": "0.20.8",
   "description": "Craft Notes: an evolving registry of human-readable notes for directories across devices",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,8 +20,8 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "craft-common-store-local": "0.20.4",
-    "craft-common-base": "0.20.4"
+    "craft-common-store-local": "0.21.0",
+    "craft-common-base": "0.20.5"
   },
   "engines": {
     "node": ">=23"

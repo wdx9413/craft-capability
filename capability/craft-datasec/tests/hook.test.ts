@@ -120,16 +120,17 @@ test("PostToolUse sanitizes values, flushes once and restores only through local
   const temp = join(f.root, "..");
   try {
     const response: Json = { type: "text", stdout: `call ${PHONE}`, count: 2, nested: [PHONE, { password: "hunter2" }] };
-    const posted = run("claude", "PostToolUse", { tool_name: "Bash", tool_response: response }, f.root);
+    const posted = run("codex", "PostToolUse", { tool_name: "Bash", tool_response: response }, f.root);
     assert.match(posted.systemMessage, /已在本地脱敏/u);
-    const safe = posted.hookSpecificOutput.updatedToolOutput as Json;
+    const safe = JSON.parse(posted.reason) as Json;
     const serialized = JSON.stringify(safe);
     assert(!serialized.includes(PHONE));
     const tokens = [...new Set(serialized.match(TOKEN) ?? [])];
     assert.equal(tokens.length, 1);
     const token = tokens[0];
-    const database = sessionDirectory(f.root, "fixture-session");
-    assert(existsSync(join(database, "mappings.sqlite")));
+    const database = sessionDirectory(join(f.root, "codex"), "fixture-session");
+    assert(!existsSync(join(database, "mappings.sqlite")));
+    assert(readdirSync(database).some(name => name.endsWith(".json")));
 
     const edit = run("codex", "PreToolUse", {
       tool_name: "Edit",
@@ -161,7 +162,7 @@ test("PostToolUse sanitizes values, flushes once and restores only through local
     assert.match(JSON.parse(second.reason).stdout, /again /u);
     assert(!second.reason.includes(PHONE));
 
-    const restored = new TokenVault(f.root, "fixture-session");
+    const restored = new TokenVault(f.root, "fixture-session", "codex");
     try {
       const postedToken = run("claude", "PostToolUse", { tool_response: { stdout: PHONE } }, f.root)
         .hookSpecificOutput.updatedToolOutput.stdout as string;
@@ -240,14 +241,30 @@ test("rejected rules and an unwritable vault map to closed failure responses", (
 test("pending tokens can be flushed when an existing vault already holds other mappings", () => {
   const f = fixture();
   try {
-    const vault = new TokenVault(f.root, "fixture-session");
+    const vault = new TokenVault(f.root, "fixture-session", "codex");
     vault.token("identity", ["110105", "19900307", "6754"].join(""));
     vault.flush();
     vault.close();
     const posted = run("codex", "PostToolUse", { tool_response: { stdout: PHONE } }, f.root);
     assert.equal(posted.decision, "block");
-    assert.equal(readdirSync(sessionDirectory(f.root, "fixture-session")).filter(name => name.startsWith(".write-")).length, 0);
+    assert.equal(readdirSync(sessionDirectory(join(f.root, "codex"), "fixture-session")).filter(name => name.startsWith(".write-")).length, 0);
   } finally {
     f.close();
   }
+});
+
+
+test("SessionEnd dispatch deletes only its Host session and reports invalid identity", () => {
+  const f = fixture();
+  try {
+    for (const host of ["claude", "codex"] as const) {
+      run(host, "PostToolUse", {tool_response: PHONE}, f.root);
+    }
+    assert.deepEqual(run("codex", "SessionEnd", {}, f.root), {});
+    assert(!existsSync(sessionDirectory(join(f.root, "codex"), "fixture-session")));
+    assert(existsSync(sessionDirectory(join(f.root, "claude"), "fixture-session")));
+    assert.deepEqual(run("codex", "SessionEnd", {}, f.root), {});
+    assert.deepEqual(run("codex", "SessionEnd", {session_id:""}, f.root), {systemMessage: FAILURE});
+    assert.deepEqual(run("codex", "SessionEnd", {session_id:undefined}, f.root), {systemMessage: FAILURE});
+  } finally { f.close(); }
 });

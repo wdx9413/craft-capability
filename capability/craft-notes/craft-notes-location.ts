@@ -225,8 +225,8 @@ export class CraftNotesLocationRegistry {
   registerDevice(args: RegisterDeviceArgs): DeviceRecord {
     const id = String(args.id ?? `device_${randomUUID()}`);
     const existing = this.store.find("device", id);
-    if (existing?.status === "disabled" && args.status === "active" && !args.device_note?.trim()) {
-      throw new Error("device reactivated requires a Device Note");
+    if (existing?.status === "disabled" && args.status === "active") {
+      throw new Error("device must be reactivated through setDeviceStatus with a confirmed Device Note");
     }
     if (typeof args.device_note !== "string" || !args.device_note.trim()) throw new Error("device_note is required");
     this.notes.createDevice({ ...args, id, note: args.device_note });

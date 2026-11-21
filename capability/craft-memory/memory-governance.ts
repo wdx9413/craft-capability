@@ -167,7 +167,9 @@ export class MemoryGovernanceKernel {
       const superseded = supersededMemoryIds.map((memoryId) => {
         const previous = this.store.get("memory_ledger", memoryId);
         if (previous.status !== "active") return previous;
-        return this.ledger.transition({ memory_id: previous.id, status: "superseded", replacement_id: memory.id, reason: `superseded by ${memory.id}` }).memory as JsonObject;
+        const scope = previous.scope as JsonObject;
+        return this.ledger.transition({ memory_id: previous.id, scope_kind: scope.kind, scope_id: scope.id,
+          status: "superseded", replacement_id: memory.id, reason: `superseded by ${memory.id}` }).memory as JsonObject;
       });
       const saved = this.store.save("memory_candidate", String(candidate.id), { ...payload(candidate), ledger_memory_id: memory.id, status: "approved" });
       return { candidate: saved, memory, superseded, idempotent: result.idempotent };

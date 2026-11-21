@@ -1,6 +1,6 @@
 {
   "name": "@craft/capability-memory",
-  "version": "0.20.8",
+  "version": "0.20.9",
   "description": "Craft Memory capability: the scoped, Source-pinned, Evidence-checked Memory Ledger",
   "type": "module",
   "main": "./dist/capability.js",
@@ -66,10 +66,10 @@
   "license": "MIT",
   "types": "./dist/capability.d.ts",
   "dependencies": {
-    "craft-common-base": "0.20.4",
-    "craft-common-log": "0.20.12",
+    "craft-common-base": "0.20.5",
+    "craft-common-log": "0.20.13",
     "craft-common-ontology": "0.20.7",
-    "craft-common-store-local": "0.20.4"
+    "craft-common-store-local": "0.21.0"
   },
   "engines": {
     "node": ">=23"

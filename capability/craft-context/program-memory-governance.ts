@@ -1,18 +1,20 @@
 import { stableDigest } from "craft-common-base/digest";
 import type { CraftStore, JsonObject } from "craft-common-store-local/store";
 
+export type ProgramMemorySources = { observations?: Pick<CraftStore, "find">; design?: Pick<CraftStore, "find">; proof?: Pick<CraftStore, "find"> };
+
 const candidateKind = "program_memory_candidate";
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0))].sort() : [];
 }
 
-export function captureGovernedProgramMemory(store: CraftStore, args: JsonObject): JsonObject {
+export function captureGovernedProgramMemory(store: CraftStore, args: JsonObject, sources: ProgramMemorySources = {}): JsonObject {
   const { statement, scenario_key, domain, scope } = args;
   const steps = Array.isArray(args.steps) ? args.steps : [];
   const contentDigest = stableDigest({ statement, scenario_key, domain, scope, steps });
   const contractId = typeof args.evaluation_contract_id === "string" ? args.evaluation_contract_id : null;
-  const contract = contractId ? store.find("evaluation_contract", contractId) : null;
+  const contract = contractId ? (sources.design ?? store).find("evaluation_contract", contractId) : null;
   if (contractId && (!contract || contract.effect !== "program_memory_design" || stableDigest(contract.scope) !== stableDigest(scope)
     || typeof contract.contract_digest !== "string" || (contract.budget as JsonObject | undefined)?.task_effect_design == null)) {
     throw new Error("Program Memory requires a frozen evaluation design contract in the same project");
@@ -20,11 +22,14 @@ export function captureGovernedProgramMemory(store: CraftStore, args: JsonObject
   const candidateDigest = stableDigest({ content_digest: contentDigest, contract_digest: contract?.contract_digest ?? null });
   const id = `program_memory_${candidateDigest.slice(-24)}`;
   return store.transaction(() => {
+    const diagnosticId = `program_memory_${stableDigest({ content_digest: contentDigest, contract_digest: null }).slice(-24)}`;
+    const diagnostic = contractId ? store.find(candidateKind, diagnosticId) : null;
     const current = store.find(candidateKind, id);
-    const evidenceIds = strings([...strings(current?.evidence_ids), ...strings(args.evidence_ids)]).slice(0, 50);
-    const evidence = independentProgramMemoryObservations(store, evidenceIds, scope, scenario_key);
-    const sources = [current?.source_refs, args.source_refs].flatMap(value => Array.isArray(value) ? value as JsonObject[] : []);
-    const sourceRefs = [...new Map(sources.map(value => [stableDigest(value), value])).values()].slice(0, 50);
+    const evidenceIds = strings([...strings(current?.evidence_ids), ...strings(diagnostic?.evidence_ids), ...strings(args.evidence_ids)]).slice(0, 50);
+    const evidence = independentProgramMemoryObservations(store, evidenceIds, scope, scenario_key, sources);
+    const sourceInputs = [current?.source_refs, diagnostic?.source_refs, args.source_refs,
+      ...(diagnostic ? [[{ kind: candidateKind, id: diagnostic.id, version: diagnostic.version, digest: diagnostic.digest }]] : [])].flatMap(value => Array.isArray(value) ? value as JsonObject[] : []);
+    const sourceRefs = [...new Map(sourceInputs.map(value => [stableDigest(value), value])).values()].slice(0, 50);
     if (current && stableDigest(current.evidence_ids) === stableDigest(evidenceIds)
       && stableDigest(current.source_refs ?? []) === stableDigest(sourceRefs)
       && current.independent_evidence_count === evidence.length) return current;
@@ -40,16 +45,16 @@ export function captureGovernedProgramMemory(store: CraftStore, args: JsonObject
 }
 
 export function independentProgramMemoryObservations(
-  store: CraftStore, evidenceIds: string[], scope: unknown, scenarioKey: unknown,
+  store: CraftStore, evidenceIds: string[], scope: unknown, scenarioKey: unknown, sources: ProgramMemorySources = {},
 ): JsonObject[] {
   const scopeId = (scope as JsonObject | undefined)?.id;
   if (typeof scopeId !== "string" || !scopeId.startsWith("project:")) return [];
   const sessions = new Set<string>(), tasks = new Set<string>();
   const independent: JsonObject[] = [];
   for (const id of evidenceIds) {
-    const observation = store.find("workflow_evolution_observation", id);
+    const observation = (sources.observations ?? store).find("workflow_evolution_observation", id);
     const source = observation?.source as JsonObject | undefined;
-    const proof = store.find("program_memory_verified_observation", id);
+    const proof = (sources.proof ?? store).find("program_memory_verified_observation", id);
     if (observation?.lifecycle !== "accepted" || observation.outcome !== "passed"
       || observation.sanitized !== true || observation.content_stored !== false
       || (observation.scenario_key !== scenarioKey && (observation.scenario_signature as JsonObject | undefined)?.scenario_key !== scenarioKey)
@@ -59,7 +64,7 @@ export function independentProgramMemoryObservations(
       || proof.source_session_id !== source.session_id || proof.source_digest !== source.digest) continue;
     const verified = strings(observation.evidence_ids).some(evidenceId => {
       if (evidenceId !== proof.evidence_id) return false;
-      const item = store.find("evidence", evidenceId), metadata = item?.metadata as JsonObject | undefined;
+      const item = (sources.observations ?? store).find("evidence", evidenceId), metadata = item?.metadata as JsonObject | undefined;
       return item?.record_origin !== "caller_asserted" && item?.source_type === "host_completion_signal"
         && (item.confidence === "bounded" || item.confidence === "confirmed")
         && metadata?.provenance === "host_completion_signal" && metadata.content_stored === false
@@ -75,14 +80,18 @@ export function independentProgramMemoryObservations(
   return independent;
 }
 
-export function programMemorySubmission(store: CraftStore, candidate: JsonObject): { design: JsonObject; observations: JsonObject[] } {
-  const design = typeof candidate.evaluation_design_id === "string" ? store.find("evaluation_contract", candidate.evaluation_design_id) : null;
+export function programMemorySubmission(store: CraftStore, candidate: JsonObject, sources: ProgramMemorySources = {}): { design: JsonObject; observations: JsonObject[] } {
+  const design = typeof candidate.evaluation_design_id === "string" ? (sources.design ?? store).find("evaluation_contract", candidate.evaluation_design_id) : null;
   if (design?.effect !== "program_memory_design" || design.contract_digest !== candidate.evaluation_design_digest
     || stableDigest(design.scope) !== stableDigest(candidate.scope)) throw new Error("Program Memory requires a bound evaluation design contract");
   const adapter = store.find("domain_adapter", `domain_adapter_${candidate.domain}`);
-  const observations = independentProgramMemoryObservations(store, strings(candidate.evidence_ids), candidate.scope, candidate.scenario_key);
+  const observations = independentProgramMemoryObservations(store, strings(candidate.evidence_ids), candidate.scope, candidate.scenario_key, sources);
   if (observations.length < Math.max(2, Number(adapter?.value_threshold ?? 2))) {
     throw new Error("Program Memory requires independent verified project observations");
   }
+  const signatures = observations.map(item => item.scenario_signature as JsonObject | undefined);
+  if (signatures.some(signature => typeof signature?.scenario_key !== "string" || !signature.scenario_key
+    || (signature?.project as JsonObject | undefined)?.id !== (candidate.scope as JsonObject).id)
+    || new Set(signatures.map(stableDigest)).size !== 1) throw new Error("Program Memory requires a classified unambiguous project scenario");
   return { design, observations };
 }

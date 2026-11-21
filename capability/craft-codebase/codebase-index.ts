@@ -843,7 +843,7 @@ export class CodebaseIndexKernel {
     return new ProjectGraphStore(String(workspace.root_path), String(workspace.id), this.store.paths);
   }
   private graphRecord(index: JsonObject, kind: "codebase_index_shard" | "codebase_index_edge_route", id: string): JsonObject {
-    return index.graph_storage === PROJECT_GRAPH_STORAGE ? this.projectGraphStore(index).read(id) : this.store.get(kind, id);
+    return index.graph_storage === PROJECT_GRAPH_STORAGE && !this.store.ownerRecords ? this.projectGraphStore(index).read(id) : this.store.get(kind, id);
   }
   private persistIndex(identity: JsonObject, indexId: string, sourceFileCount: number, analysis: JsonObject,
     rawNodes: readonly Node[], rawEdges: readonly Edge[], diagnostics: readonly JsonObject[], guard?: IndexPublicationGuard): JsonObject {
@@ -957,7 +957,7 @@ export class CodebaseIndexKernel {
     const manifest = { location_route_version: 2, shard_ids: shardIds, shard_digests: shardDigests, node_shard_ids: nodeShardIds, edge_shard_ids: edgeShardIds,
       node_count: nodes.length, edge_count: edges.length, graph_digest: graphDigest, node_digest: nodeDigest, edge_digest: edgeDigest, edge_route_shards: edgeRouteShards };
     const workspace = this.store.get("workspace", String(identity.workspace_id));
-    const projectGraphStore = workspace.snapshot_storage === "project_codebase" ? new ProjectGraphStore(String(workspace.root_path), String(identity.workspace_id), this.store.paths) : null;
+    const projectGraphStore = !this.store.ownerRecords && workspace.snapshot_storage === "project_codebase" ? new ProjectGraphStore(String(workspace.root_path), String(identity.workspace_id), this.store.paths) : null;
     const immutableGraphRecords: SaveEntry[] = shards.map((shard, ordinal) => ({ kind: "codebase_index_shard", id: shardIds[ordinal]!, payload: {
       node_count: shard.nodes.length, edge_count: shard.edges.length, nodes: shard.nodes, edges: shard.edges, graph_digest: shardDigests[ordinal] } }));
     if (projectGraphStore) {
@@ -1011,7 +1011,7 @@ export class CodebaseIndexKernel {
     const usage = codebaseUsageWeights(this.store, String(index.id));
     const shardIds = Array.isArray(index.node_shard_ids) ? index.node_shard_ids as string[] : [];
     const payloadDigest = shardIds.length
-      ? index.graph_storage === PROJECT_GRAPH_STORAGE ? this.projectGraphStore(index).recordsFingerprint(shardIds)
+      ? index.graph_storage === PROJECT_GRAPH_STORAGE && !this.store.ownerRecords ? this.projectGraphStore(index).recordsFingerprint(shardIds)
         : this.store.latestRecordsDigest("codebase_index_shard", shardIds)
       : stableDigest(Array.isArray(index.nodes) ? index.nodes : []);
     const fingerprint = stableDigest({ index_id: index.id, identity_digest: index.identity_digest, node_digest: index.node_digest,
@@ -1084,7 +1084,7 @@ export class CodebaseIndexKernel {
   }
   private impactDependencyDigest(index: JsonObject, dependencies: ImpactDependencies): string {
     const routes = [...dependencies.routes].sort(), shards = [...dependencies.shards].sort();
-    if (index.graph_storage === PROJECT_GRAPH_STORAGE) return this.projectGraphStore(index).recordsDigest([...routes, ...shards]);
+    if (index.graph_storage === PROJECT_GRAPH_STORAGE && !this.store.ownerRecords) return this.projectGraphStore(index).recordsDigest([...routes, ...shards]);
     return stableDigest({ routes: this.store.latestRecordsDigest("codebase_index_edge_route", routes),
       shards: this.store.latestRecordsDigest("codebase_index_shard", shards) });
   }
