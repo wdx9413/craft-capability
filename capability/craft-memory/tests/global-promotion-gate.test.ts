@@ -25,6 +25,13 @@ test("global Memory gate rejects non-shareable sensitivity and recognizable iden
   assert.deepEqual(globalPromotionContentDecision(CONTENT, "public"), { eligible: true });
 });
 
+test("global Memory gate keeps project-scoped statements inside their project", () => {
+  for (const content of ["本项目默认使用 Node.js", "当前仓库约定：先运行 focused tests", "This repository uses Node.js"]) {
+    assert.deepEqual(globalPromotionContentDecision(content, "internal"), { eligible: false, reason_code: "project_scope_not_shareable" });
+  }
+  assert.deepEqual(globalPromotionContentDecision("I prefer Node.js across projects.", "internal"), { eligible: true });
+});
+
 async function fixture(options: { sharedEvidence?: boolean; invalidScope?: boolean; content?: string; sensitivity?: string } = {}) {
   const root = await mkdtemp(join(tmpdir(), "craft-memory-global-gate-"));
   const store = await new CraftStore(craftPaths(root)).open();
@@ -89,6 +96,7 @@ test("global Memory promotion uses independent project evidence and commits", as
 test("Memory capture auto-promotion rejects identifiers, non-shareable sensitivity, shared Evidence, and accepts a clean case", async () => {
   const cases = [
     { options: { content: ["Contact alex at alex", "@example.com."].join("") }, reason: "deidentification_required" },
+    { options: { content: "本项目默认使用 Node.js" }, reason: "project_scope_not_shareable" },
     { options: { sensitivity: "restricted" }, reason: "sensitivity_not_shareable" },
     { options: { sharedEvidence: true }, reason: "shared_evidence" },
   ];
