@@ -31,6 +31,7 @@ import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
 import { mapLegacyKind } from 'craft-common-ontology/validation';
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
 import { MemoryFileStore } from "./memory-files.ts";
+import { mergeSourceLineage, normalizeSourceLineage } from "./source-lineage.ts";
 
 const MEMORY_KINDS = new Set(["working", "episodic", "preference", "procedural"]);
 const MEMORY_STATUS = new Set(["active", "superseded", "revoked", "expired"]);
@@ -214,6 +215,7 @@ export class MemoryLedgerKernel {
     // `preference:diet:sugar`).  It is deliberately not inferred from prose:
     // an LLM guess must not silently merge two unrelated memories.
     const topic = args.topic === undefined ? undefined : text(args.topic, "topic");
+    const sourceLineage = normalizeSourceLineage(args.source_lineage);
     const observedAt = args.observed_at === undefined && typeof existing?.observed_at === "string"
       ? existing.observed_at
       : (date(args.observed_at, "observed_at") ?? new Date().toISOString());
@@ -229,8 +231,14 @@ export class MemoryLedgerKernel {
     const identityDigest = stableDigest(identity);
     if (existing) {
       if (existing.identity_digest !== identityDigest) throw new Error("Memory Ledger idempotency conflict");
+      const existingLineage = normalizeSourceLineage(existing.source_lineage);
+      if (sourceLineage.some(item => item.origin === "historical_replay") && existingLineage.length === 0) {
+        throw new Error("Memory Ledger lineage is unavailable; replay reconciliation is required");
+      }
+      const mergedLineage = mergeSourceLineage(existing.source_lineage, sourceLineage);
+      const memory = mergedLineage.changed ? this.store.save("memory_ledger", memoryId, { ...payload(existing), source_lineage: mergedLineage.source_lineage }) : existing;
       const projection = this.files.sync(memoryScope);
-      return { memory: existing, projection, idempotent: true };
+      return { memory, projection, idempotent: true };
     }
     // The body lives in the content store; the record keeps the reference and the digest, so
     // the Ledger indexes memory rather than holding it, and a rewritten body is a drift error.
@@ -240,7 +248,7 @@ export class MemoryLedgerKernel {
     // typed relation graph read a memory's concept without rewriting its digest.
     const conceptKind = args.concept_kind === undefined || args.concept_kind === null
       ? mapLegacyKind("memory", kind) : args.concept_kind;
-    const memory = this.store.create("memory_ledger", memoryId, { ...identity, content_ref: contentRef, identity_digest: identityDigest, status: "active", supersedes_id: null, contradiction_ids: [], derived_from_ids: supportRefs.map(ref => ref.id), concept_kind: conceptKind, ...(workingNote ? {} : { working_legacy_compatibility: kind === "working" }) });
+    const memory = this.store.create("memory_ledger", memoryId, { ...identity, content_ref: contentRef, identity_digest: identityDigest, status: "active", supersedes_id: null, contradiction_ids: [], derived_from_ids: supportRefs.map(ref => ref.id), concept_kind: conceptKind, source_lineage: sourceLineage, ...(workingNote ? {} : { working_legacy_compatibility: kind === "working" }) });
     return { memory, projection: this.files.sync(memoryScope), idempotent: false };
   }
 

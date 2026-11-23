@@ -1,6 +1,6 @@
 import type { JsonObject } from 'craft-common-store-local/store';
-import { randomUUID } from 'node:crypto';
-import { digestJson } from 'craft-common-base/digest';
+import { createHash, randomUUID } from 'node:crypto';
+import { digestJson, stableDigest } from 'craft-common-base/digest';
 import { text } from 'craft-common-base/validation';
 import { sessionStorageScopeId } from 'craft-common-store-local/paths';
 import { mapLegacyKind, validateConcept } from 'craft-common-ontology/validation';
@@ -8,6 +8,14 @@ import type { MemoryGovernanceKernel } from "./memory-governance.ts";
 import { SharedPromotionEvidenceError } from "./memory-ledger.ts";
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
 import { globalPromotionContentDecision } from "./global-promotion-gate.ts";
+import { historicalReplayProjectionDigest, mergeSourceLineage, normalizeSourceLineage, sourceLineageDigest, sourceLineageEvidenceIds,
+  validateHistoricalReplayProjection } from "./source-lineage.ts";
+
+function digest(value: unknown): string { return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`; }
+function payload(record: JsonObject): JsonObject {
+  const { id: _id, version: _version, created_at: _created, updated_at: _updated, ...value } = record;
+  return value;
+}
 
 /** The host supplies Evidence/source ports; this package never imports a harness. */
 export class MemoryCapture {
@@ -31,6 +39,138 @@ export class MemoryCapture {
     if (args.scope_kind !== undefined && args.scope_kind !== "session") throw new Error("observed Memory facts must start in session scope");
     if (args.scope_id !== undefined && text(args.scope_id, "scope_id") !== sessionId) throw new Error("scope_id must match session_id");
     return this.capture({ ...args, scope_kind: "session", scope_id: sessionId, project_scope_id: projectScopeId }, "host-observed-stable-fact");
+  }
+
+  /** Create a bounded project candidate from explicitly authorized replay Evidence without entering live promotion. */
+  captureHistoricalReplayCandidate(args: JsonObject): JsonObject {
+    if (args.dataset_partition !== "candidate_generation") throw new Error("historical Memory replay requires candidate_generation partition");
+    const projectScopeId = text(args.project_scope_id, "project_scope_id");
+    const sourceLineage = normalizeSourceLineage(args.source_lineage);
+    if (!sourceLineage.length || sourceLineage.some(lineage => lineage.origin !== "historical_replay" || lineage.project_scope_id !== projectScopeId)) {
+      throw new Error("historical Memory replay requires matching historical replay lineage");
+    }
+    const evidenceIds = [...new Set(sourceLineage.flatMap(lineage => (lineage.evidence_refs as JsonObject[]).map(ref => String(ref.id))))].sort();
+    for (const lineage of sourceLineage) for (const ref of lineage.evidence_refs as JsonObject[]) {
+      const evidence = this.memory.store.find("evidence", String(ref.id));
+      if (!evidence || evidence.version !== ref.version) throw new Error("historical Memory replay Evidence is missing or changed");
+      const metadata = validateHistoricalReplayProjection(evidence);
+      if (metadata.replay_run_id !== lineage.replay_run_id || metadata.projection_status !== "active") {
+        throw new Error("Historical Memory replay Evidence projection is unavailable or belongs to another run");
+      }
+    }
+    const scopeId = projectScopeId.slice("project:".length);
+    const kind = text(args.kind ?? "preference", "kind");
+    const topic = args.topic === undefined ? "" : text(args.topic, "topic");
+    const content = text(args.content, "content");
+    const candidateId = String(args.candidate_id ?? `memory_candidate_replay_${stableDigest({ projectScopeId, kind, topic, content_digest: digestJson(content) }).slice(-32)}`);
+    const proposed = this.memory.propose({ candidate_id: candidateId, source_id: String(args.source_id ?? "builtin.evidence-wiki"), kind,
+      scope_kind: "project", scope_id: scopeId, ...(args.scope_envelope === undefined ? {} : { scope_envelope: args.scope_envelope }),
+      ...(topic ? { topic } : {}), content, sensitivity: args.sensitivity ?? "internal", confidence: "unverified",
+      evidence_ids: evidenceIds, proposed_by: "historical-replay", proposal_only: true, source_lineage: sourceLineage,
+      ...(args.valid_until === undefined ? {} : { valid_until: args.valid_until }) });
+    return { ...proposed, status: (proposed.candidate as JsonObject | null)?.status ?? proposed.status ?? "candidate", auto_committed: false };
+  }
+
+  historicalReplayCleanupPreview(args: JsonObject): JsonObject {
+    const replayRunId = text(args.replay_run_id, "replay_run_id");
+    const items: JsonObject[] = [
+      ...(["memory_candidate", "memory_ledger"] as const).flatMap(kind => this.memory.store.list(kind, 10_000, record => Array.isArray(record.source_lineage)
+      && (record.source_lineage as JsonObject[]).some(lineage => lineage?.origin === "historical_replay" && lineage.replay_run_id === replayRunId), false)
+      .map(record => {
+        const lineage = normalizeSourceLineage(record.source_lineage);
+        const retained = lineage.filter(item => !(item.origin === "historical_replay" && item.replay_run_id === replayRunId));
+        return { kind, id: String(record.id), version: Number(record.version), lineage_digest: sourceLineageDigest(lineage),
+          action: retained.length ? "remove_replay_lineage" : "revoke" };
+      })),
+      ...this.memory.store.list("evidence", 10_000, evidence => evidence.source_type === "historical_replay_projection", false).flatMap(evidence => {
+        const metadata = validateHistoricalReplayProjection(evidence);
+        return metadata.replay_run_id === replayRunId && metadata.projection_status === "active"
+          ? [{ kind: "evidence_projection", id: String(evidence.id), version: Number(evidence.version),
+              lineage_digest: historicalReplayProjectionDigest(evidence), action: "revoke" }]
+          : [];
+      })
+    ].sort((left, right) => String(left.kind).localeCompare(String(right.kind)) || String(left.id).localeCompare(String(right.id)));
+    const owner = "memory";
+    return { owner, replay_run_id: replayRunId, manifest_digest: stableDigest({ owner, replay_run_id: replayRunId, items }), items };
+  }
+
+  historicalReplayCleanupApply(args: JsonObject): JsonObject {
+    const replayRunId = text(args.replay_run_id, "replay_run_id");
+    const preview = this.historicalReplayCleanupPreview({ replay_run_id: replayRunId });
+    const expectedDigest = text(args.expected_manifest_digest, "expected_manifest_digest");
+    const receiptId = `memory_replay_cleanup_${stableDigest({ replay_run_id: replayRunId, manifest_digest: expectedDigest }).slice(-32)}`;
+    if ((preview.items as JsonObject[]).length === 0) {
+      const receipt = this.memory.store.find("memory_replay_cleanup_receipt", receiptId);
+      if (receipt) return { status: "cleaned", idempotent: true, receipt };
+    }
+    if (preview.manifest_digest !== expectedDigest) throw new Error("Memory replay cleanup manifest changed; preview again");
+    const items = preview.items as JsonObject[];
+    const currentRecords = items.map(item => {
+      if (item.kind !== "memory_candidate" && item.kind !== "memory_ledger" && item.kind !== "evidence_projection") throw new Error("Memory replay cleanup object kind is unsupported");
+      const storeKind = item.kind === "evidence_projection" ? "evidence" : String(item.kind);
+      const record = this.memory.store.get(storeKind, String(item.id));
+      const recordDigest = item.kind === "evidence_projection" ? historicalReplayProjectionDigest(record) : sourceLineageDigest(record.source_lineage);
+      if (record.version !== item.version || recordDigest !== item.lineage_digest) {
+        throw new Error("Memory replay object changed after cleanup preview");
+      }
+      if (item.kind === "evidence_projection") {
+        const metadata = validateHistoricalReplayProjection(record);
+        return { item, record, store_kind: "evidence", payload: { ...payload(record), confidence: "rejected",
+          metadata: { ...metadata, projection_status: "revoked" } } };
+      }
+      const lineage = normalizeSourceLineage(record.source_lineage);
+      const retained = lineage.filter(entry => !(entry.origin === "historical_replay" && entry.replay_run_id === replayRunId));
+      const allEvidenceIds = new Set(lineage.flatMap(entry => (entry.evidence_refs as JsonObject[]).map(ref => String(ref.id))));
+      if (!Array.isArray(record.evidence_ids)) throw new Error("Memory Evidence lineage is incomplete; cleanup requires reconciliation");
+      const evidenceIds = record.evidence_ids.map(String);
+      if (evidenceIds.some(id => !allEvidenceIds.has(id))) throw new Error("Memory Evidence lineage is incomplete; cleanup requires reconciliation");
+      const retainedEvidence = new Set(retained.flatMap(entry => (entry.evidence_refs as JsonObject[]).map(ref => String(ref.id))));
+      const nextEvidenceIds = evidenceIds.filter(id => retainedEvidence.has(id));
+      const identity = item.kind === "memory_candidate" ? { source_id: record.source_id, kind: record.kind, scope: record.scope, scope_envelope: record.scope_envelope,
+        topic: record.topic ?? "", content_digest: record.content_digest, sensitivity: record.sensitivity, confidence: record.confidence,
+        evidence_ids: nextEvidenceIds, valid_until: record.valid_until ?? null, observed_at: record.observed_at, effective_from: record.effective_from,
+        ...(Array.isArray(record.promotion_support_refs) && record.promotion_support_refs.length ? { promotion_support_refs: record.promotion_support_refs } : {}) }
+        : { source_id: record.source_id, source_version: record.source_version, kind: record.kind, scope: record.scope, scope_envelope: record.scope_envelope,
+          ...(record.topic === undefined ? {} : { topic: record.topic }), content_digest: record.content_digest, sensitivity: record.sensitivity, confidence: record.confidence,
+          evidence_ids: nextEvidenceIds, valid_until: record.valid_until ?? null, observed_at: record.observed_at, effective_from: record.effective_from,
+          working_note: record.working_note === true, ...(Array.isArray(record.promotion_support_refs) && record.promotion_support_refs.length ? { promotion_support_refs: record.promotion_support_refs } : {}) };
+      const payloadValue: JsonObject = { ...payload(record), source_lineage: retained,
+        evidence_ids: nextEvidenceIds, identity_digest: digest(identity) };
+      if (!retained.length) {
+        payloadValue.status = item.kind === "memory_candidate" ? "rejected" : "revoked";
+        if (item.kind === "memory_candidate") delete payloadValue.content;
+        else {
+          payloadValue.transition_reason_digest = stableDigest({ replay_cleanup: replayRunId, manifest_digest: expectedDigest });
+          if (record.content_ref && typeof record.content_ref === "object") {
+            const ref = record.content_ref as JsonObject;
+            const scope = record.scope as JsonObject;
+            const redactedRef = this.memory.store.contentStore.rewriteSync({ kind: "memory", record_id: String(record.id), version: Number(record.version),
+              scope: `${String(scope.kind)}:${String(scope.id)}`, status: "revoked", sensitivity: String(record.sensitivity), source_id: String(record.source_id),
+              body: "This historical replay Memory content was revoked.", current_path: String(ref.path) });
+            payloadValue.content_ref = redactedRef;
+            delete payloadValue.content;
+          } else if (typeof record.content === "string") {
+            payloadValue.content = "This historical replay Memory content was revoked.";
+          } else {
+            throw new Error("Memory replay Ledger content cannot be safely redacted");
+          }
+        }
+      }
+      return { item, record, store_kind: String(item.kind), payload: payloadValue };
+    });
+    const { cleaned, receipt } = this.memory.store.transaction(() => {
+      const cleaned = currentRecords.map(({ item, record, store_kind, payload: payloadValue }) => ({ owner_kind: item.kind,
+        record: this.memory.store.updateIfVersion(store_kind, String(record.id), Number(record.version), payloadValue) }));
+      const receipt = this.memory.store.create("memory_replay_cleanup_receipt", receiptId, { replay_run_id: replayRunId,
+        manifest_digest: expectedDigest, owner: "memory", cleaned_object_count: cleaned.length, content_free: true, status: "cleaned" });
+      return { cleaned, receipt };
+    });
+    const ledgerScopes = new Map<string, JsonObject>();
+    for (const item of cleaned) if (item.owner_kind === "memory_ledger" && item.record.scope && typeof item.record.scope === "object") {
+      ledgerScopes.set(stableDigest(item.record.scope), item.record.scope as JsonObject);
+    }
+    for (const scope of ledgerScopes.values()) this.memory.ledger.files.sync(scope as { kind: string; id: string });
+    return { status: "cleaned", idempotent: false, receipt, cleaned: cleaned.map(item => ({ kind: item.owner_kind, id: item.record.id, version: item.record.version })) };
   }
 
   private capture(args: JsonObject, proposedBy: string): JsonObject {
@@ -75,9 +215,10 @@ export class MemoryCapture {
         || digestJson(existingEvidence.metadata) !== digestJson(evidenceInput.metadata))) throw new Error("Memory capture evidence idempotency conflict");
       return existingEvidence ?? this.evidenceRecord(evidenceInput);
     });
+    const sourceLineage = this.liveHookLineage(args, evidence);
     const proposed = this.memory.propose({ candidate_id: String(args.candidate_id ?? `memory_candidate_statement_${suffix}`), source_id: "builtin.evidence-wiki", kind,
       scope_kind: scopeKind, scope_id: scopeId, ...(args.scope_envelope === undefined ? {} : { scope_envelope: args.scope_envelope }), ...(topic === undefined ? {} : { topic }), content, sensitivity: args.sensitivity ?? "internal", confidence: "bounded",
-      proposal_only: hints.length > 0, evidence_ids: [evidence.id], proposed_by: proposedBy, valid_until: args.valid_until,
+      proposal_only: hints.length > 0, evidence_ids: [evidence.id], proposed_by: proposedBy, valid_until: args.valid_until, source_lineage: sourceLineage,
       ...(args.memory_id === undefined ? {} : { memory_id: args.memory_id }) });
     if (scopeKind === "session" && args.project_scope_id) {
       const intentId = `memory_observation_intent_${suffix}`;
@@ -115,6 +256,21 @@ export class MemoryCapture {
     const candidate = proposed.candidate as JsonObject;
     return { ...proposed, evidence, auto_committed: false,
       next_action: candidate.status === "conflict_pending" ? "resolve_conflict" : "review_or_accept" };
+  }
+
+  private liveHookLineage(args: JsonObject, evidence: JsonObject): JsonObject[] {
+    if (args.session_id === undefined || args.project_scope_id === undefined) return [];
+    const sessionId = text(args.session_id, "session_id");
+    const rawProjectScope = text(args.project_scope_id, "project_scope_id");
+    const projectScopeId = rawProjectScope.startsWith("project:") ? rawProjectScope : `project:${rawProjectScope}`;
+    const taskId = args.task_id === undefined ? undefined : text(args.task_id, "task_id");
+    const sourceDigest = args.source_digest === undefined ? args.task_source_digest : args.source_digest;
+    return normalizeSourceLineage([{ origin: "live_hook", session_id: sessionId,
+      ...(args.turn_id === undefined ? {} : { turn_id: text(args.turn_id, "turn_id") }), ...(taskId === undefined ? {} : { task_id: taskId }),
+      project_scope_id: projectScopeId,
+      source_ref: { kind: taskId === undefined ? "codex_session" : "codex_session_task", id: taskId ?? sessionId,
+        ...(sourceDigest === undefined ? {} : { digest: sourceDigest }) },
+      evidence_refs: [{ kind: "evidence", id: String(evidence.id), version: Number(evidence.version) }] }]);
   }
 
   /** Process durable Host-observation intents using Memory's own evidence and tier gates. */
@@ -237,24 +393,38 @@ export class MemoryCapture {
     const projectId = input.projectId;
     const observationIdentity = { content_digest: contentDigest, project_id: projectId, session_digest: digestJson(input.sessionId), kind: candidate.kind, topic: candidate.topic ?? "" };
     const observationId = `memory_observation_${digestJson(observationIdentity).slice(-32)}`;
+    const observationLineage = normalizeSourceLineage(candidate.source_lineage);
     const existingObservation = this.memory.store.find("memory_observation", observationId);
     if (existingObservation && input.evidence && (digestJson(existingObservation.evidence_refs ?? null) !== digestJson([{ id: input.evidence.id, version: input.evidence.version }])
       || digestJson(existingObservation.evidence_ids ?? null) !== digestJson(candidate.evidence_ids ?? []))) throw new Error("Memory observation evidence binding changed");
+    if (existingObservation && observationLineage.some(item => item.origin === "live_hook") && normalizeSourceLineage(existingObservation.source_lineage).length === 0) {
+      throw new Error("Memory observation lineage is unavailable; live replay reconciliation is required");
+    }
     if (!existingObservation) this.memory.store.create("memory_observation", observationId, {
       ...observationIdentity, scope: { kind: "project", id: projectId }, evidence_ids: candidate.evidence_ids ?? [], observed_at: candidate.observed_at,
       ...(input.evidence ? { evidence_refs: [{ id: input.evidence.id, version: input.evidence.version }] } : {}),
+      source_lineage: observationLineage,
       ...(typeof candidate.valid_until === "string" ? { valid_until: candidate.valid_until } : {}), content_free: true, status: "active",
     });
+    const candidateLineage = normalizeSourceLineage(candidate.source_lineage);
     const observations = this.memory.store.list("memory_observation", 10_000, row => row.status === "active"
       && (!row.valid_until || Date.parse(String(row.valid_until)) >= Date.now())
       && row.content_digest === contentDigest && row.project_id === projectId
       && (row.scope as JsonObject | undefined)?.kind === "project" && (row.scope as JsonObject | undefined)?.id === projectId
-      && row.kind === candidate.kind && row.topic === (candidate.topic ?? "") && this.memory.ledger.observationEvidenceCurrent(row));
+      && row.kind === candidate.kind && row.topic === (candidate.topic ?? "") && this.memory.ledger.observationEvidenceCurrent(row))
+      .filter(row => {
+        if (!candidateLineage.length) return true;
+        const lineage = normalizeSourceLineage(row.source_lineage);
+        const lineageEvidence = new Set(sourceLineageEvidenceIds(lineage));
+        const rowEvidence = Array.isArray(row.evidence_ids) ? row.evidence_ids.map(String) : [];
+        return lineage.length > 0 && rowEvidence.length > 0 && rowEvidence.every(id => lineageEvidence.has(id));
+      });
     const sessions = new Set(observations.map(row => String(row.session_digest)));
     if (sessions.size < 2) return [];
 
     const results: JsonObject[] = [];
     const evidenceIds = [...new Set(observations.flatMap(row => Array.isArray(row.evidence_ids) ? row.evidence_ids.map(String) : []))];
+    const promotionLineage = normalizeSourceLineage(observations.flatMap(row => Array.isArray(row.source_lineage) ? row.source_lineage : []));
     // A promotion cannot outlive the shortest-lived supporting observation.
     const validUntil = observations.map(row => typeof row.valid_until === "string" ? row.valid_until : null)
       .filter((value): value is string => value !== null).sort((left, right) => Date.parse(left) - Date.parse(right))[0] ?? null;
@@ -270,7 +440,7 @@ export class MemoryCapture {
       const promoted = this.proposePromotion({ candidate_id: projectCandidateId, source_id: candidate.source_id, kind: candidate.kind,
         scope_kind: "project", scope_id: projectId, content: candidate.content, topic: candidate.topic || undefined,
         sensitivity: candidate.sensitivity, confidence: "bounded", evidence_ids: evidenceIds, proposed_by: "automatic-memory-promotion", valid_until: validUntil,
-        promotion_support_refs: supportRefs });
+        promotion_support_refs: supportRefs, source_lineage: promotionLineage });
       const governedPromotion = this.resolveRepeatedConflict(promoted, evidenceIds);
       results.push({ tier: "project", repetition_count: sessions.size, ...governedPromotion,
         ...(governedPromotion.auto_committed === true ? { memory_file: this.memory.ledger.files.sync({ kind: "project", id: projectId }, input.projectRoot) } : {}) });
@@ -287,6 +457,7 @@ export class MemoryCapture {
         && (row.scope as JsonObject | undefined)?.kind === "global" && this.memory.ledger.promotionSupported(row));
       if (!globalExisting.length) {
         const globalEvidenceIds = [...new Set(projectMemories.flatMap(row => Array.isArray(row.evidence_ids) ? row.evidence_ids.map(String) : []))];
+        const globalLineage = normalizeSourceLineage(projectMemories.flatMap(row => Array.isArray(row.source_lineage) ? row.source_lineage : []));
         const supportRefs = projectMemories.map(row => ({ kind: "memory_ledger", id: String(row.id), version: Number(row.version) }))
           .sort((left, right) => left.id.localeCompare(right.id));
         const globalCandidateId = `memory_candidate_global_${digestJson({ contentDigest, kind: candidate.kind, topic: candidate.topic ?? "", supportRefs }).slice(-32)}`;
@@ -303,7 +474,7 @@ export class MemoryCapture {
         const globalArgs = { candidate_id: globalCandidateId, source_id: candidate.source_id, kind: candidate.kind,
           scope_kind: "global", scope_id: "global", content: candidate.content, topic: candidate.topic || undefined,
           sensitivity: candidate.sensitivity, confidence: "bounded", evidence_ids: globalEvidenceIds, proposed_by: "automatic-memory-promotion",
-          valid_until: globalValidUntil, promotion_support_refs: supportRefs };
+          valid_until: globalValidUntil, promotion_support_refs: supportRefs, source_lineage: globalLineage };
         try { this.memory.ledger.validatePromotionSupport(globalArgs); }
         catch (error) {
           const sharedEvidence = error instanceof SharedPromotionEvidenceError;

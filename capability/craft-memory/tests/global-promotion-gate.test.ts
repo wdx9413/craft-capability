@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { CraftStore, type JsonObject } from "craft-common-store-local/store";
 import { craftPaths } from "craft-common-store-local/paths";
-import { stableDigest } from "craft-common-base/digest";
+import { digestJson, stableDigest } from "craft-common-base/digest";
 import { MemoryCapture } from "../memory-capture.ts";
 import { MemoryGovernanceKernel } from "../memory-governance.ts";
 import { MemoryLedgerKernel } from "../memory-ledger.ts";
@@ -57,6 +57,8 @@ async function fixture(options: { sharedEvidence?: boolean; invalidScope?: boole
     store.create("memory_observation", `observation-${suffix}`, {
       content_digest: contentDigest, project_id: "project-current", session_digest: `session-${suffix}`, kind: "preference", topic: "",
       scope: { kind: "project", id: "project-current" }, evidence_ids: [evidenceId], evidence_refs: [{ id: evidenceId, version: 1 }], content_free: true, status: "active",
+      source_lineage: [{ origin: "test_fixture", session_id: `session-${suffix}`, project_scope_id: "project:project-current",
+        source_ref: { kind: "test_observation", id: `observation-${suffix}` }, evidence_refs: [{ kind: "evidence", id: evidenceId, version: 1 }] }],
     });
   }
   const capture = new MemoryCapture(governance, () => undefined, (args) => store.create("evidence", String(args.evidence_id), {
@@ -86,10 +88,19 @@ async function fixture(options: { sharedEvidence?: boolean; invalidScope?: boole
 test("global Memory promotion uses independent project evidence and commits", async () => {
   const f = await fixture();
   try {
+    const projectMemory = f.store.get("memory_ledger", "memory-project-0");
+    const projectEvidenceId = String((projectMemory.evidence_ids as string[])[0]);
+    f.store.save("memory_ledger", String(projectMemory.id), { ...projectMemory, source_lineage: [{ origin: "test_fixture", session_id: "project-zero-session",
+      project_scope_id: "project:project-0", source_ref: { kind: "fixture", id: "project-zero" },
+      evidence_refs: [{ kind: "evidence", id: projectEvidenceId, version: 1 }] }] });
+    f.store.create("memory_observation", "legacy-source-lineage-omitted", { content_digest: stableDigest(f.content), project_id: "project-current",
+      session_digest: "legacy-no-lineage-session", kind: "preference", topic: "", scope: { kind: "project", id: "project-current" }, status: "active" });
     const result = f.promote();
     const global = result.find(item => item.tier === "global")!;
     assert.equal(global.auto_committed, true);
-    assert.equal(f.store.list("memory_ledger", 100, row => (row.scope as JsonObject).kind === "global").length, 1);
+    const globalMemories = f.store.list("memory_ledger", 100, row => (row.scope as JsonObject).kind === "global");
+    assert.equal(globalMemories.length, 1);
+    assert.ok((globalMemories[0]!.source_lineage as JsonObject[]).some(item => item.session_id === "project-zero-session"));
   } finally { await f.close(); }
 });
 
@@ -134,6 +145,9 @@ test("observed Memory capture queues promotion for idempotent asynchronous proce
     assert.equal(first.promoted, 1);
     assert.equal(second.processed, 0);
     assert.equal(second.promoted, 0);
+    const captureEvidenceId = String((captured.evidence as JsonObject).id);
+    const observation = f.store.list("memory_observation", 100, row => Array.isArray(row.evidence_ids) && row.evidence_ids.includes(captureEvidenceId))[0]!;
+    assert.ok((observation.source_lineage as JsonObject[]).some(item => item.origin === "live_hook"));
     assert.equal(f.store.list("memory_ledger", 100, row => (row.scope as JsonObject).kind === "global").length, 1);
   } finally { await f.close(); }
 });
@@ -171,6 +185,23 @@ test("session archive retains the minimum approved Memory candidate until the wo
     assert.equal(cleaned.content_deleted, true);
     assert.equal(cleaned.promotion_content_retained, false);
     assert.equal(f.store.list("memory_observation", 10, row => row.project_id === "project-current").length, 3);
+  } finally { await f.close(); }
+});
+
+test("session archive refuses to attach live lineage to an existing legacy observation", async () => {
+  const f = await fixture();
+  try {
+    const captured = f.captureObserved() as JsonObject;
+    const candidate = captured.candidate as JsonObject;
+    const evidence = captured.evidence as JsonObject;
+    const intent = f.store.list("memory_observation_intent", 1)[0]!;
+    const identity = { content_digest: candidate.content_digest, project_id: intent.project_id, session_digest: digestJson("session-current"),
+      kind: candidate.kind, topic: candidate.topic ?? "" };
+    f.store.create("memory_observation", `memory_observation_${digestJson(identity).slice(-32)}`, {
+      ...identity, scope: { kind: "project", id: intent.project_id }, evidence_ids: candidate.evidence_ids,
+      evidence_refs: [{ id: evidence.id, version: evidence.version }], content_free: true, status: "active",
+    });
+    assert.throws(() => f.archive(), /existing observation lineage is unavailable/u);
   } finally { await f.close(); }
 });
 

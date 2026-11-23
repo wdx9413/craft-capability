@@ -6,6 +6,7 @@ import { retrievalTerms } from 'craft-common-base/retrieval-terms';
 import { SCOPE_KINDS } from 'craft-common-base/validation';
 import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
 import { mapLegacyKind, validateConcept } from 'craft-common-ontology/validation';
+import { mergeSourceLineage, normalizeSourceLineage } from "./source-lineage.ts";
 
 const SECRET = /(?:api[_-]?key|authorization|cookie|password|passwd|secret|token)\s*[:=]\s*[^\s]{6,}/iu;
 /**
@@ -33,6 +34,12 @@ function digest(v: unknown): string { return `sha256:${createHash("sha256").upda
 function noSecret(v: string, name: string): string { if (SECRET.test(v)) throw new Error(`${name} must not contain credentials or secrets`); return v; }
 function payload(r: JsonObject): JsonObject { const { id: _id, version: _version, created_at: _created, updated_at: _updated, ...p } = r; return p; }
 function evidenceIds(v: unknown): string[] { if (v === undefined) return []; if (!Array.isArray(v)) throw new Error("evidence_ids must be an array"); const values = v.map((x) => text(x, "evidence_ids")); if (new Set(values).size !== values.length) throw new Error("evidence_ids must be unique"); return values.sort(); }
+function candidateSemanticIdentity(value: JsonObject): JsonObject {
+  const { evidence_ids: _evidenceIds, source_lineage: _sourceLineage, id: _id, version: _version, created_at: _created, updated_at: _updated,
+    content: _content, status: _status, conflict_ids: _conflicts, conflicting_memory_ids: _memoryConflicts, proposed_by: _proposedBy,
+    concept_kind: _conceptKind, identity_digest: _identityDigest, review: _review, ledger_memory_id: _ledgerMemoryId, ...identity } = value;
+  return identity;
+}
 
 /** Latest explicit confirmation for this exact content revision, never an expiry extension. */
 export function latestMemoryConfirmation(store: CraftStore, memory: JsonObject, now: string): string | null {
@@ -94,6 +101,7 @@ export class MemoryGovernanceKernel {
     const sourceId = text(args.source_id, "source_id"); const source = this.store.get("knowledge_source", sourceId);
     if (source.status !== "active" || source.trust === "untrusted") throw new Error("Memory Source is unavailable");
     const candidateId = String(args.candidate_id ?? id("memory_candidate")); const existing = this.store.find("memory_candidate", candidateId);
+    const sourceLineage = normalizeSourceLineage(args.source_lineage);
     let validUntil: string | null = existing && args.valid_until === undefined
       ? (typeof existing.valid_until === "string" ? existing.valid_until : null)
       : null;
@@ -112,16 +120,31 @@ export class MemoryGovernanceKernel {
     const supportRefs = this.ledger.validatePromotionSupport({ ...args, scope_kind: scopeKind, scope_id: scopeId, kind, content, topic });
     const identity = { source_id: sourceId, kind, scope, scope_envelope: envelope, topic, content_digest: digest(content), sensitivity: String(args.sensitivity ?? "internal"), confidence, evidence_ids: ids, valid_until: validUntil, observed_at: observedAt, effective_from: effectiveFrom,
       ...(supportRefs.length ? { promotion_support_refs: supportRefs } : {}) };
-    if (existing) { if (existing.identity_digest !== digest(identity)) throw new Error("Memory candidate idempotency conflict"); return { candidate: existing, idempotent: true }; }
+    if (existing) {
+      const existingLineage = normalizeSourceLineage(existing.source_lineage);
+      const incomingReplay = sourceLineage.some(item => item.origin === "historical_replay");
+      if (incomingReplay && existingLineage.length === 0) throw new Error("Memory candidate lineage is unavailable; replay reconciliation is required");
+      const sameIdentity = existing.identity_digest === digest(identity);
+      const sameClaim = existingLineage.length > 0 && digest(candidateSemanticIdentity(existing)) === digest(candidateSemanticIdentity(identity as JsonObject));
+      if (!sameIdentity && !sameClaim) throw new Error("Memory candidate idempotency conflict");
+      const mergedLineage = mergeSourceLineage(existing.source_lineage, sourceLineage);
+      const mergedEvidence = sameIdentity ? ids : [...new Set([...(Array.isArray(existing.evidence_ids) ? existing.evidence_ids.map(String) : []), ...ids])].sort();
+      if (sameIdentity && !mergedLineage.changed) return { candidate: existing, idempotent: true };
+      const updatedIdentity = { ...candidateSemanticIdentity(existing), evidence_ids: mergedEvidence };
+      const candidate = this.store.save("memory_candidate", candidateId, { ...payload(existing), evidence_ids: mergedEvidence,
+        source_lineage: mergedLineage.source_lineage, identity_digest: digest(updatedIdentity) });
+      return { candidate, idempotent: true };
+    }
     // Empty subjects are deliberately *not* treated as mutually contradictory.
     // A missing classifier must cause less automation, not turn every preference in
     // a scope into one impossible conflict set.
     const conflicts = topic ? this.store.listScoped("memory_candidate", [scope], 10_000, (item) => Boolean(!["rejected", "superseded", "expired"].includes(String(item.status)) && (!item.valid_until || Date.parse(String(item.valid_until)) >= nowMillis) && item.scope && JSON.stringify(item.scope) === JSON.stringify(identity.scope) && item.topic === topic && item.content_digest !== identity.content_digest)) : [];
     const conflictingMemories = topic ? this.store.listScoped("memory_ledger", [scope], 10_000, (item) => Boolean(item.status === "active" && (!item.valid_until || Date.parse(String(item.valid_until)) >= nowMillis) && item.topic === topic && item.scope && JSON.stringify(item.scope) === JSON.stringify(identity.scope) && item.content_digest !== identity.content_digest)) : [];
     const status = conflicts.length || conflictingMemories.length ? "conflict_pending" : "candidate";
-    const candidate = this.store.create("memory_candidate", candidateId, { ...identity, content, status, conflict_ids: conflicts.map((x) => x.id), conflicting_memory_ids: conflictingMemories.map((x) => x.id), proposed_by: proposer(args.proposed_by, "agent"), concept_kind: concept.kind, identity_digest: digest(identity) });
+    const candidate = this.store.create("memory_candidate", candidateId, { ...identity, content, status, conflict_ids: conflicts.map((x) => x.id), conflicting_memory_ids: conflictingMemories.map((x) => x.id), proposed_by: proposer(args.proposed_by, "agent"), concept_kind: concept.kind, source_lineage: sourceLineage, identity_digest: digest(identity) });
     for (const conflict of conflicts) this.store.save("memory_candidate", String(conflict.id), { ...payload(conflict), status: "conflict_pending", conflict_ids: [...new Set([...(conflict.conflict_ids as string[] ?? []), candidate.id])] });
-    const eligible = args.proposal_only !== true && policy.mode === "governed" && conflicts.length === 0 && conflictingMemories.length === 0 && ids.length > 0 && ids.every((e) => {
+    const eligible = args.proposal_only !== true && !sourceLineage.some(item => item.origin === "historical_replay")
+      && policy.mode === "governed" && conflicts.length === 0 && conflictingMemories.length === 0 && ids.length > 0 && ids.every((e) => {
       const confidenceValue = String(this.store.get("evidence", e).confidence);
       return policy.min_confidence === "bounded" ? ["bounded", "confirmed"].includes(confidenceValue) : confidenceValue === "confirmed";
     });
@@ -136,6 +159,9 @@ export class MemoryGovernanceKernel {
   review(args: JsonObject): JsonObject {
     const candidate = this.store.get("memory_candidate", text(args.candidate_id, "candidate_id")); const decision = text(args.decision, "decision");
     if (!new Set(["approve", "reject"]).has(decision)) throw new Error("decision must be approve or reject");
+    if (decision === "approve" && normalizeSourceLineage(candidate.source_lineage).some(item => item.origin === "historical_replay")) {
+      throw new Error("Historical Memory replay candidates cannot be approved; create a separately sourced live candidate");
+    }
     const reviewer = text(args.reviewer, "reviewer"); const reason = noSecret(text(args.reason, "reason"), "reason");
     if (decision === "approve") {
       const ids = candidate.evidence_ids as string[]; const trusted = ids.some((e) => ["bounded", "confirmed"].includes(String(this.store.get("evidence", e).confidence)));
@@ -150,6 +176,9 @@ export class MemoryGovernanceKernel {
     return this.store.transaction(() => {
       const candidate = this.store.get("memory_candidate", text(args.candidate_id, "candidate_id"));
       if (candidate.status !== "approved") throw new Error("Only approved Memory candidates can enter the Ledger");
+      if (normalizeSourceLineage(candidate.source_lineage).some(item => item.origin === "historical_replay")) {
+        throw new Error("Historical Memory replay candidates cannot enter the Ledger");
+      }
       // A candidate has exactly one Ledger identity, even across processes and
       // retries after a rolled-back publication. Immutable content files left by
       // a failed transaction are safely reused by ContentStore on that retry.
@@ -161,7 +190,7 @@ export class MemoryGovernanceKernel {
         return { candidate, memory, superseded: [], idempotent: true };
       }
       const result = this.ledger.remember({ memory_id: memoryId, source_id: candidate.source_id, kind: candidate.kind, scope_kind: (candidate.scope as JsonObject).kind, scope_id: (candidate.scope as JsonObject).id, scope_envelope: candidate.scope_envelope, content: candidate.content, topic: candidate.topic || undefined, sensitivity: candidate.sensitivity, confidence: candidate.confidence, evidence_ids: candidate.evidence_ids, valid_until: candidate.valid_until, observed_at: candidate.observed_at, effective_from: candidate.effective_from,
-        proposed_by: candidate.proposed_by, promotion_support_refs: candidate.promotion_support_refs });
+        proposed_by: candidate.proposed_by, promotion_support_refs: candidate.promotion_support_refs, source_lineage: candidate.source_lineage });
       const memory = result.memory as JsonObject;
       const supersededMemoryIds = Array.isArray(candidate.supersedes_memory_ids) ? candidate.supersedes_memory_ids as string[] : [];
       const superseded = supersededMemoryIds.map((memoryId) => {

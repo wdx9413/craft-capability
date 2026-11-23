@@ -17,6 +17,7 @@ import { scopeFromKey } from 'craft-common-base/scope-policy';
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";
 import { assessKnowledgeEvaluationProvenance, knowledgeClaimPromotionProofVerified, knowledgeEvaluationAdjudicationVerified, knowledgeEvaluationEvidence, knowledgeEvaluationSourceMatches, knowledgeTaskEffectEvidenceVerified } from "@craft/capability-knowledge/knowledge-evaluation-provenance";
 import { trustedOrganizationSourceDigests } from "./organization-source-trust.ts";
+import { normalizeKnowledgeSourceLineage } from "./source-lineage.ts";
 
 type Verdict = "eligible" | "revalidation_required" | "rejected" | "already_reviewed";
 type Confidence = "bounded" | "confirmed";
@@ -217,6 +218,9 @@ export class KnowledgeAutoReviewKernel {
     });
     const blockingReasons: string[] = [];
     if (decision === "supported" && packetDigest === null) blockingReasons.push("semantic_review_packet_required");
+    if (normalizeKnowledgeSourceLineage(claim.source_lineage).some(item => item.origin === "historical_replay")) {
+      blockingReasons.push("historical_replay_requires_separately_sourced_live_candidate");
+    }
     if (claim.status !== "candidate" && claim.status !== "reviewed") blockingReasons.push(`claim_status_${String(claim.status)}`);
     if (source.status !== "active" || source.trust === "untrusted") blockingReasons.push("source_not_trusted_active");
     if (!credibleEvidence) blockingReasons.push("credible_evidence_missing");
@@ -334,6 +338,9 @@ export class KnowledgeAutoReviewKernel {
     }
     else if (claim.status !== "candidate") { verdict = "rejected"; reasons.push(`claim_status_${String(claim.status)}`); }
     else {
+      if (normalizeKnowledgeSourceLineage(claim.source_lineage).some(item => item.origin === "historical_replay")) {
+        reasons.push("historical_replay_requires_separately_sourced_live_candidate");
+      }
       const sourceId = typeof claim.source_id === "string" ? claim.source_id : null;
       const source = sourceId ? this.store.find("knowledge_source", sourceId) : null;
       const evidenceIds = Array.isArray(claim.evidence_ids) ? claim.evidence_ids.map(String) : [];

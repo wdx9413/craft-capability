@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { CraftStore, JsonObject } from 'craft-common-store-local/store';
+import { stableDigest } from "craft-common-base/digest";
 import { text } from 'craft-common-base/validation';
 import { scopeEnvelope, scopeFromKey } from 'craft-common-base/scope-policy';
 import { mapLegacyKind, validateConcept } from 'craft-common-ontology/validation';
@@ -7,6 +8,8 @@ import { claimReadable } from "./claim-access.ts";
 import { knowledgeScenarioCanClassify, updateKnowledgeScenarioClaim, validateKnowledgeScenarioDefinition } from "./scenario-catalog.ts";
 import { knowledgeDirectoryForScope } from "./project-knowledge-content.ts";
 import { recordKnowledgeSessionEvidence } from "./session-evidence.ts";
+import { historicalReplayProjectionDigest, knowledgeSourceLineageDigest, knowledgeSourceLineageEvidenceIds,
+  mergeKnowledgeSourceLineage, normalizeKnowledgeSourceLineage, validateHistoricalReplayProjection } from "./source-lineage.ts";
 const KNOWLEDGE_KINDS = new Set(["fact", "rule", "decision", "term", "failure_mode"]);
 /** `failure_mode` is accepted for compatibility and validated as a rule. */
 const KNOWLEDGE_CONCEPT_KINDS = new Set(["fact", "rule", "decision", "term"]);
@@ -66,6 +69,61 @@ export class KnowledgeClaimGovernance {
   constructor(store: CraftStore) { this.store = store; }
   knowledgeSessionEvidenceRecord(args: JsonObject): JsonObject { return recordKnowledgeSessionEvidence(this.store, args); }
   knowledgeClaimSave(args: JsonObject): JsonObject {
+    if (args.source_lineage !== undefined) throw new Error("Knowledge source_lineage can only be written through an owner-validated capture path");
+    return this.saveClaim(args, []);
+  }
+  captureHistoricalReplayCandidate(args: JsonObject): JsonObject {
+    if (args.dataset_partition !== "candidate_generation") throw new Error("historical Knowledge replay requires candidate_generation partition");
+    const projectScopeId = text(args.project_scope_id, "project_scope_id");
+    const sourceLineage = normalizeKnowledgeSourceLineage(args.source_lineage);
+    if (!sourceLineage.length || sourceLineage.some(lineage => lineage.origin !== "historical_replay" || lineage.project_scope_id !== projectScopeId)) {
+      throw new Error("historical Knowledge replay requires matching historical replay lineage");
+    }
+    const scope = text(args.scope, "scope");
+    if (scope !== projectScopeId) throw new Error("historical Knowledge replay claim scope must match project_scope_id");
+    const evidenceIds = knowledgeSourceLineageEvidenceIds(sourceLineage);
+    for (const lineage of sourceLineage) for (const ref of lineage.evidence_refs as JsonObject[]) {
+      const evidence = this.store.find("evidence", String(ref.id));
+      if (!evidence || evidence.version !== ref.version) throw new Error("historical Knowledge replay Evidence is missing or changed");
+      const metadata = validateHistoricalReplayProjection(evidence);
+      if (metadata.replay_run_id !== lineage.replay_run_id || metadata.projection_status !== "active") {
+        throw new Error("Historical Knowledge replay Evidence projection is unavailable or belongs to another run");
+      }
+    }
+    const kind = text(args.kind ?? "fact", "kind");
+    const content = document(args.content, "content");
+    const claimId = String(args.claim_id ?? `knowledge_claim_replay_${stableDigest({ projectScopeId, kind, content_digest: rawContentDigest(content) }).slice(-32)}`);
+    const existing = this.store.find("knowledge_claim", claimId);
+    if (existing && normalizeKnowledgeSourceLineage(existing.source_lineage).length === 0) {
+      throw new Error("Knowledge claim lineage is unavailable; replay must use an isolated candidate");
+    }
+    const accumulatedEvidenceIds = [...new Set([...(Array.isArray(existing?.evidence_ids) ? existing.evidence_ids.map(String) : []), ...evidenceIds])].sort();
+    const result = this.saveClaim({ ...args, claim_id: claimId, kind, scope, content, evidence_ids: accumulatedEvidenceIds, proposed_by: "historical-replay" }, sourceLineage);
+    const claim = result.claim as JsonObject;
+    return { ...result, status: claim.status, auto_committed: false, promotion_blocked: true };
+  }
+  captureLiveHookCandidate(args: JsonObject): JsonObject {
+    const scope = text(args.scope, "scope");
+    const parsedScope = scopeFromKey(scope);
+    if (parsedScope.kind !== "project") throw new Error("live Knowledge Hook capture requires a project scope");
+    const projectScopeId = `project:${parsedScope.id}`;
+    const sourceLineage = normalizeKnowledgeSourceLineage(args.source_lineage);
+    if (!sourceLineage.length || sourceLineage.some(lineage => lineage.origin !== "live_hook" || lineage.project_scope_id !== projectScopeId)) {
+      throw new Error("live Knowledge Hook capture requires matching live_hook lineage");
+    }
+    const evidenceIds = knowledgeSourceLineageEvidenceIds(sourceLineage);
+    const suppliedEvidenceIds = uniqueTextArray(args.evidence_ids, "evidence_ids");
+    if (valueDigest(suppliedEvidenceIds.slice().sort()) !== valueDigest(evidenceIds)) throw new Error("live Knowledge Hook evidence_ids must match lineage Evidence refs");
+    for (const lineage of sourceLineage) for (const ref of lineage.evidence_refs as JsonObject[]) {
+      const evidence = this.store.find("evidence", String(ref.id));
+      if (!evidence || evidence.version !== ref.version) throw new Error("live Knowledge Hook Evidence is missing or changed");
+    }
+    const claim = String(args.claim_id ?? `knowledge_claim_hook_${stableDigest({ projectScopeId, session: sourceLineage.map(item => item.session_id), content_digest: rawContentDigest(document(args.content, "content")) }).slice(-32)}`);
+    const saved = this.saveClaim({ ...args, claim_id: claim, scope, evidence_ids: evidenceIds, proposed_by: args.proposed_by ?? "live-hook" }, sourceLineage);
+    const claimRecord = saved.claim as JsonObject;
+    return { ...saved, candidate: claimRecord, status: claimRecord.status, auto_committed: false };
+  }
+  private saveClaim(args: JsonObject, sourceLineage: JsonObject[]): JsonObject {
     const kind = text(args.kind, "kind"); if (!KNOWLEDGE_KINDS.has(kind)) throw new Error("Knowledge claim kind is unsupported");
     const content = assertNoSecret(document(args.content, "content"), "content"); const scope = text(args.scope, "scope");
     // Every durable claim is a concept record: the shared taxonomy validates the
@@ -121,6 +179,9 @@ export class KnowledgeClaimGovernance {
     }
     const identity = { kind, content_digest: contentDigest, scope, scope_envelope: envelope, source_id: sourceId, evidence_ids: evidenceIds, tags, valid_until: validUntil, ...(title ? { title } : {}) };
     if (existing) {
+      if (sourceLineage.some(item => item.origin === "historical_replay") && existing.status === "reviewed") {
+        throw new Error("Historical Knowledge replay cannot attach to an enabled reviewed Claim");
+      }
       // v0.12.33 claims did not persist source_id in their identity.  Keep a
       // one-way compatibility match so a previously completed import remains
       // idempotent; it does not make the legacy record eligible for a newly
@@ -147,11 +208,24 @@ export class KnowledgeClaimGovernance {
       const ingestedIdentity = { ...identity, content_digest: existing.content_digest };
       const exactIngestedClaim = ingestedBodyMatches && existing.ingest_generated === true
         && valueDigest(ingestedIdentity) === valueDigest(currentClaimIdentity);
+      const existingEvidenceIds = Array.isArray(existing.evidence_ids) ? existing.evidence_ids.map(String) : [];
+      const evidenceIdsExtendExisting = existingEvidenceIds.every(id => evidenceIds.includes(id));
+      const sameReplayCandidateIdentity = sourceLineage.length > 0 && existing.ingest_generated !== true && existing.status === "candidate"
+        && normalizeKnowledgeSourceLineage(existing.source_lineage).length > 0 && evidenceIdsExtendExisting
+        && valueDigest({ ...identity, evidence_ids: [] }) === valueDigest({ ...currentClaimIdentity, evidence_ids: [] });
       if (existing.identity_digest !== valueDigest(identity) && existing.identity_digest !== valueDigest(classifiedIdentity)
-        && existing.identity_digest !== valueDigest(legacyIdentity) && existing.identity_digest !== valueDigest(olderIdentity) && !exactIngestedClaim) {
+        && existing.identity_digest !== valueDigest(legacyIdentity) && existing.identity_digest !== valueDigest(olderIdentity) && !exactIngestedClaim && !sameReplayCandidateIdentity) {
         throw new Error("Knowledge claim idempotency conflict");
       }
       let saved = existing;
+      if (sourceLineage.length) {
+        const mergedLineage = mergeKnowledgeSourceLineage(existing.source_lineage, sourceLineage);
+        if (mergedLineage.changed || sameReplayCandidateIdentity && valueDigest(existingEvidenceIds) !== valueDigest(evidenceIds)) {
+          saved = this.store.save("knowledge_claim", String(existing.id), { ...recordPayload(existing),
+            ...(sameReplayCandidateIdentity && valueDigest(existingEvidenceIds) !== valueDigest(evidenceIds) ? { evidence_ids: evidenceIds, identity_digest: valueDigest(identity) } : {}),
+            ...(mergedLineage.changed ? { source_lineage: mergedLineage.source_lineage } : {}) });
+        }
+      }
       let previousScenarioCatalog: JsonObject | null = null;
       if (scenarioKey && (existing.scenario_key !== scenarioKey || (existing.coarse_scenario_key ?? null) !== (coarseScenarioKey ?? null))) {
         if (typeof existing.scenario_key === "string") previousScenarioCatalog = updateKnowledgeScenarioClaim(knowledgeDir, existing, "inactive");
@@ -169,10 +243,97 @@ export class KnowledgeClaimGovernance {
       ...(coarseScenarioKey ? { coarse_scenario_key: coarseScenarioKey } : {}), content_ref: contentRef, identity_digest: valueDigest(identity),
       // Concept tag is non-identity metadata: it never changes the claim's digest,
       // so the shared taxonomy can be extended without invalidating old records.
-      concept_kind: concept.kind, status: "candidate", review: null, ...(proposedBy === null ? {} : { proposed_by: proposedBy }) });
+      concept_kind: concept.kind, status: "candidate", review: null, source_lineage: sourceLineage,
+      ...(proposedBy === null ? {} : { proposed_by: proposedBy }) });
     const scenarioCatalog = updateKnowledgeScenarioClaim(knowledgeDir, { ...claim,
       ...(scenarioDefinition ? { scenario_definition: scenarioDefinition } : {}), ...(coarseScenarioDefinition ? { coarse_scenario_definition: coarseScenarioDefinition } : {}) });
     return { claim, idempotent: false, ...(scenarioCatalog ? { scenario_catalog: scenarioCatalog } : {}) };
+  }
+  historicalReplayCleanupPreview(args: JsonObject): JsonObject {
+    const replayRunId = text(args.replay_run_id, "replay_run_id");
+    const items: JsonObject[] = this.store.list("knowledge_claim", 100_000, claim => Array.isArray(claim.source_lineage)
+      && (claim.source_lineage as JsonObject[]).some(item => item?.origin === "historical_replay" && item.replay_run_id === replayRunId), false)
+      .map(claim => {
+        const lineage = normalizeKnowledgeSourceLineage(claim.source_lineage);
+        const retained = lineage.filter(item => !(item.origin === "historical_replay" && item.replay_run_id === replayRunId));
+        return { kind: "knowledge_claim", id: String(claim.id), version: Number(claim.version), lineage_digest: knowledgeSourceLineageDigest(lineage),
+          action: retained.length ? "remove_replay_lineage" : "revoke" };
+      }).concat(this.store.list("evidence", 10_000, evidence => evidence.source_type === "historical_replay_projection", false).flatMap(evidence => {
+        const metadata = validateHistoricalReplayProjection(evidence);
+        return metadata.replay_run_id === replayRunId && metadata.projection_status === "active"
+          ? [{ kind: "evidence_projection", id: String(evidence.id), version: Number(evidence.version),
+              lineage_digest: historicalReplayProjectionDigest(evidence), action: "revoke" }]
+          : [];
+      })).sort((left, right) => left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id));
+    const owner = "knowledge";
+    return { owner, replay_run_id: replayRunId, manifest_digest: stableDigest({ owner, replay_run_id: replayRunId, items }), items };
+  }
+  historicalReplayCleanupApply(args: JsonObject): JsonObject {
+    const replayRunId = text(args.replay_run_id, "replay_run_id");
+    const preview = this.historicalReplayCleanupPreview({ replay_run_id: replayRunId });
+    const expectedDigest = text(args.expected_manifest_digest, "expected_manifest_digest");
+    const receiptId = `knowledge_replay_cleanup_${stableDigest({ replay_run_id: replayRunId, manifest_digest: expectedDigest }).slice(-32)}`;
+    if ((preview.items as JsonObject[]).length === 0) {
+      const receipt = this.store.find("knowledge_replay_cleanup_receipt", receiptId);
+      if (receipt) return { status: "cleaned", idempotent: true, receipt };
+    }
+    if (preview.manifest_digest !== expectedDigest) throw new Error("Knowledge replay cleanup manifest changed; preview again");
+    const items = preview.items as JsonObject[];
+    const currentRecords = items.map(item => {
+      if (item.kind !== "knowledge_claim" && item.kind !== "evidence_projection") throw new Error("Knowledge replay cleanup object kind is unsupported");
+      const storeKind = item.kind === "evidence_projection" ? "evidence" : "knowledge_claim";
+      const claim = this.store.get(storeKind, String(item.id));
+      if (item.kind === "evidence_projection") {
+        if (claim.version !== item.version || historicalReplayProjectionDigest(claim) !== item.lineage_digest) {
+          throw new Error("Knowledge replay Evidence projection changed after cleanup preview");
+        }
+        const metadata = validateHistoricalReplayProjection(claim);
+        return { kind: item.kind, claim, next: { ...recordPayload(claim), confidence: "rejected",
+          metadata: { ...metadata, projection_status: "revoked" } }, status: "revoked" };
+      }
+      const lineage = normalizeKnowledgeSourceLineage(claim.source_lineage);
+      if (claim.version !== item.version || knowledgeSourceLineageDigest(lineage) !== item.lineage_digest) {
+        throw new Error("Knowledge replay claim changed after cleanup preview");
+      }
+      const retained = lineage.filter(entry => !(entry.origin === "historical_replay" && entry.replay_run_id === replayRunId));
+      const allEvidenceIds = new Set(lineage.flatMap(entry => (entry.evidence_refs as JsonObject[]).map(ref => String(ref.id))));
+      if (!Array.isArray(claim.evidence_ids)) throw new Error("Knowledge Evidence lineage is incomplete; cleanup requires reconciliation");
+      const evidenceIds = claim.evidence_ids.map(String);
+      if (evidenceIds.some(id => !allEvidenceIds.has(id))) throw new Error("Knowledge Evidence lineage is incomplete; cleanup requires reconciliation");
+      const retainedEvidence = new Set(retained.flatMap(entry => (entry.evidence_refs as JsonObject[]).map(ref => String(ref.id))));
+      const nextEvidenceIds = evidenceIds.filter(id => retainedEvidence.has(id));
+      const identity = { kind: claim.kind, content_digest: claim.content_digest, scope: claim.scope, scope_envelope: claim.scope_envelope,
+        source_id: claim.source_id, evidence_ids: nextEvidenceIds, tags: claim.tags, valid_until: claim.valid_until ?? null,
+        ...(typeof claim.title === "string" ? { title: claim.title } : {}) };
+      const next: JsonObject = { ...recordPayload(claim), source_lineage: retained, evidence_ids: nextEvidenceIds, identity_digest: valueDigest(identity) };
+      if (!retained.length) {
+        next.status = "stale";
+        next.revalidation_required = true;
+        if (!claim.content_ref || typeof claim.content_ref !== "object") throw new Error("Knowledge replay Claim content cannot be safely redacted");
+        const ref = claim.content_ref as JsonObject;
+        const redactedRef = this.store.contentStore.rewriteSync({ kind: "knowledge", record_id: String(claim.id), version: Number(ref.version),
+          scope: String(claim.scope), status: "stale", sensitivity: "internal", source_id: String(claim.source_id), ...(typeof claim.title === "string" ? { title: claim.title } : {}),
+          body: "This historical replay Knowledge content was revoked.", current_path: String(ref.path) });
+        next.content_ref = redactedRef;
+        delete next.content;
+      }
+      return { kind: "knowledge_claim", claim, next, retained, status: next.status };
+    });
+    const { cleaned, receipt } = this.store.transaction(() => {
+      const cleaned = currentRecords.map(({ kind, claim, next }) => ({ kind, record: this.store.updateIfVersion(kind === "evidence_projection" ? "evidence" : "knowledge_claim",
+        String(claim.id), Number(claim.version), next) }));
+      const receipt = this.store.create("knowledge_replay_cleanup_receipt", receiptId, { scope: "global:global", replay_run_id: replayRunId,
+        manifest_digest: expectedDigest, owner: "knowledge", cleaned_object_count: cleaned.length, content_free: true, status: "cleaned" });
+      return { cleaned, receipt };
+    });
+    for (const entry of cleaned) {
+      const claim = entry.record;
+      if (entry.kind === "knowledge_claim" && claim.status === "stale") updateKnowledgeScenarioClaim(knowledgeDirectoryForScope(this.store, String(claim.scope), {
+        ...((claim.content_ref as JsonObject | undefined)?.path ? { reference_path: String((claim.content_ref as JsonObject).path) } : {}),
+      }), claim, "inactive");
+    }
+    return { status: "cleaned", idempotent: false, receipt,
+      cleaned: cleaned.map(entry => ({ kind: entry.kind, id: entry.record.id, version: entry.record.version })) };
   }
   knowledgeClaimGet(args: JsonObject): JsonObject {
     const id = text(args.claim_id, "claim_id");

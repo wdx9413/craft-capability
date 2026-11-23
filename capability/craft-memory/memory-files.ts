@@ -6,6 +6,7 @@ import { ensureProjectStorageDirectory, isLegacySafeSessionId, parseSessionStora
 import { canonicalJson, digestJson } from 'craft-common-base/digest';
 import { temporalMemorySelect } from 'craft-common-base/memory-temporal-policy';
 import { legacyFieldAbsent } from "./memory-legacy-field.ts";
+import { normalizeSourceLineage } from "./source-lineage.ts";
 
 function legacyDirectSessionDirectory(sessionId: string): string { return join("/tmp", ".craft_data", "memory", sessionId); }
 
@@ -259,7 +260,11 @@ export class MemoryFileStore {
       if (typeof intent.project_id !== "string" || !intent.project_id || typeof candidate.content_digest !== "string") throw new Error("SESSION_ARCHIVE_OBSERVATION_UNVERIFIED: project identity is unavailable");
       const identity = { content_digest: candidate.content_digest, project_id: intent.project_id, session_digest: digestJson(scope.id), kind: candidate.kind, topic: candidate.topic ?? "" };
       const observationId = `memory_observation_${digestJson(identity).slice(-32)}`;
+      const candidateLineage = normalizeSourceLineage(candidate.source_lineage);
       const existing = this.store.find("memory_observation", observationId);
+      if (existing && candidateLineage.length && normalizeSourceLineage(existing.source_lineage).length === 0) {
+        throw new Error("SESSION_ARCHIVE_OBSERVATION_UNVERIFIED: existing observation lineage is unavailable");
+      }
       if (existing && (existing.content_digest !== identity.content_digest || existing.project_id !== identity.project_id
         || existing.session_digest !== identity.session_digest || existing.kind !== identity.kind || existing.topic !== identity.topic
         || (existing.scope as JsonObject | undefined)?.kind !== "project" || (existing.scope as JsonObject | undefined)?.id !== identity.project_id
@@ -270,6 +275,7 @@ export class MemoryFileStore {
       if (!existing) this.store.create("memory_observation", observationId, {
         ...identity, scope: { kind: "project", id: intent.project_id }, evidence_ids: candidate.evidence_ids ?? [], observed_at: candidate.observed_at,
         ...(intent.evidence_version !== undefined ? { evidence_refs: [{ id: intent.evidence_id, version: intent.evidence_version }] } : {}),
+        source_lineage: candidateLineage,
         ...(typeof candidate.valid_until === "string" ? { valid_until: candidate.valid_until } : {}), content_free: true, status: "active",
       });
     }
