@@ -12,7 +12,7 @@ export { buildDomainEvaluationSummary, DOMAIN_CASES, OFFICE_EVALUATION_CONTRACT,
 export type { DomainAdapterCandidate, DomainAdapterCandidateInput } from "./domain-adapter-contract.ts";
 export { DEFAULT_PERMISSION_MODEL, decidePermission, rejectsCredentials, serializePermissionModel } from "./permission-boundary.ts";
 export type { PermissionModel, PermissionRule, PermissionDecision, PermissionEffect } from "./permission-boundary.ts";
-export { verdictFromRunReport, requireVerified } from "./external-verifier.ts";
-export type { ExternalVerdict, CraftEvalRunReport } from "./external-verifier.ts";
+export { verdictFromRunReport, requirePassingReport, requireVerified } from "./external-verifier.ts";
+export type { ExternalVerdict, CountBoundedExternalVerdict, CraftEvalRunReport } from "./external-verifier.ts";
 export { bridgeVerifiedOutcome, isDurableCandidate } from "./learning-cycle-bridge.ts";
 export type { BridgeInput, BridgeOutcome } from "./learning-cycle-bridge.ts";

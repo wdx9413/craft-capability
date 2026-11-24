@@ -1,15 +1,11 @@
 import type { JsonObject } from 'craft-common-store-local/store';
 import { evaluateEvolutionValue, type EvolutionValueDecision } from 'craft-common-ontology';
-import type { CraftEvalRunReport, ExternalVerdict } from './external-verifier.ts';
+import type { CraftEvalRunReport, CountBoundedExternalVerdict } from './external-verifier.ts';
 import { verdictFromRunReport } from './external-verifier.ts';
-import { decidePermission, DEFAULT_PERMISSION_MODEL } from './permission-boundary.ts';
+import { decidePermission, DEFAULT_PERMISSION_MODEL, type PermissionModel } from './permission-boundary.ts';
 
-/** Bridge from external verification verdicts to craft-context self-evolution state.
- *
- * craft-context itself stays read-only; this bridge converts an external verifier's
- * verified verdict into the statement/evidence/verification inputs that the
- * Evolution Value Gate and Experience lifecycle consume, so a verified outcome
- * can flow back into the learning loop without the plugin executing code itself.
+/** Pure Value Gate adapter for a report already obtained by an owning runtime.
+ * It does not authenticate a caller-supplied report or persist an Experience candidate.
  */
 
 export interface BridgeInput {
@@ -20,29 +16,33 @@ export interface BridgeInput {
   readonly scope?: JsonObject;
   readonly sourceKind?: string;
   readonly explicit?: boolean;
+  /** A canonical local persistence target, supplied by the owning runtime. */
+  readonly permissionTarget?: string;
+  /** Runtime-resolved roots. The static default intentionally grants no path access. */
+  readonly permissionModel?: PermissionModel;
 }
 
 export interface BridgeOutcome {
-  readonly verdict: ExternalVerdict;
+  readonly verdict: CountBoundedExternalVerdict;
   readonly decision: EvolutionValueDecision;
   readonly permitted: boolean;
+  /** @deprecated Use candidateEligible to distinguish a durable candidate from a passing report. */
   readonly bridgeable: boolean;
+  readonly candidateEligible: boolean;
   readonly reason: string;
 }
 
-/** Convert a craft-eval run report into a self-evolution candidate input.
- *
- * Only a verified verdict is bridgeable; unverified verdicts are recorded as
- * diagnostic-only and never become durable facts or procedure candidates.
- */
+/** Convert report counts into a Value Gate decision; persistence is an owner responsibility. */
 export function bridgeVerifiedOutcome(input: BridgeInput): BridgeOutcome {
   const { runReport, evidenceRef, statement, domain, scope, sourceKind, explicit } = input;
 
   const verdict = verdictFromRunReport(runReport, evidenceRef);
-  const permitted = decidePermission(DEFAULT_PERMISSION_MODEL, 'experience', 'self-evolution', 'write')
-    .allowed;
+  const permissionModel = input.permissionModel ?? DEFAULT_PERMISSION_MODEL;
+  const permissionTarget = input.permissionTarget ?? '';
+  const permitted = permissionTarget.length > 0
+    && decidePermission(permissionModel, 'experience', permissionTarget, 'write').allowed;
 
-  if (!verdict.verified || !permitted) {
+  if (!verdict.report_passed || !permitted) {
     return {
       verdict,
       decision: evaluateEvolutionValue({
@@ -56,7 +56,8 @@ export function bridgeVerifiedOutcome(input: BridgeInput): BridgeOutcome {
       }),
       permitted,
       bridgeable: false,
-      reason: verdict.verified ? 'permission denied' : 'outcome not verified',
+      candidateEligible: false,
+      reason: !verdict.report_passed ? 'report did not pass' : !permissionTarget ? 'no permission target supplied' : 'permission denied',
     };
   }
 
@@ -70,12 +71,14 @@ export function bridgeVerifiedOutcome(input: BridgeInput): BridgeOutcome {
     scope,
   });
 
+  const durable = isDurableCandidate(decision);
   return {
     verdict,
     decision,
     permitted: true,
     bridgeable: true,
-    reason: 'verified outcome bridged to self-evolution',
+    candidateEligible: durable,
+    reason: durable ? 'verified candidate is eligible for the owning persistence path' : 'value gate did not produce a durable candidate',
   };
 }
 
