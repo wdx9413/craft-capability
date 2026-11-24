@@ -1,6 +1,8 @@
 /** Craft Context plugin permission & data boundary model for the Codex host. */
 
 import type { JsonObject } from 'craft-common-store-local/store';
+import { isAbsolute, relative, resolve, sep, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const PERMISSION_SCHEMA_VERSION = "craft-context.permission.v1";
 
@@ -13,7 +15,7 @@ export interface PermissionRule {
   readonly member: string;
   /** Effect applied when the rule matches. */
   readonly effect: PermissionEffect;
-  /** Path prefix matched against the operation target path; empty matches any local path. */
+  /** Explicit canonical realpath filesystem root. Resolve symlinks before calling decidePermission; empty prefixes never grant access. */
   readonly path_prefix?: string;
   /** Whether the rule covers write operations (file/edit/write/apply/patch). */
   readonly writes?: boolean;
@@ -38,13 +40,12 @@ export interface PermissionModel {
 }
 
 const SECRET_MARKER = /(?:api[_-]?key|authorization|cookie|password|secret|token)\s*[:=]\s*[^\s]{6,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/iu;
-const REMOTE_PATH = /^https?:\/\//iu;
 
 /** The default permission surface shipped with the craft-context Codex plugin.
  *
- * Reads are bounded to the user's workspace and Craft's own local data root.
- * Writes are bounded to the same workspace plus `.craft_data/` under the user
- * home; no remote write surface is granted. Credentials are never persisted.
+ * A deny-by-default policy. The runtime must add canonical workspace and data
+ * roots before any path can be allowed; this static model cannot infer them.
+ * Credentials are never persisted.
  * Codebase is read-only; execution is not granted by default.
  */
 export const DEFAULT_PERMISSION_MODEL: PermissionModel = {
@@ -54,24 +55,35 @@ export const DEFAULT_PERMISSION_MODEL: PermissionModel = {
   no_credentials: true,
   default_effect: "deny",
   rules: [
-    { id: "read-workspace", member: "all", effect: "allow", path_prefix: "", reads: true, reason: "Read within the current workspace" },
-    { id: "write-workspace", member: "all", effect: "allow", path_prefix: "", writes: true, reason: "Write within the current workspace" },
-    { id: "write-craft-data", member: "all", effect: "allow", path_prefix: ".craft_data", reads: true, writes: true, reason: "Craft local data root" },
-    { id: "read-codebase-index", member: "codebase", effect: "allow", path_prefix: "", reads: true, reason: "Read-only repository index" },
-    { id: "deny-codebase-write", member: "codebase", effect: "deny", path_prefix: "", writes: true, executes: true, reason: "Codebase member is read-only" },
-    { id: "deny-remote-surface", member: "all", effect: "deny", path_prefix: "http", writes: true, executes: true, reason: "No remote writes or execution from this plugin" },
+    { id: "deny-codebase-write", member: "codebase", effect: "deny", writes: true, executes: true, reason: "Codebase member is read-only" },
   ],
 };
 
 function isRemotePath(path: string): boolean {
-  return REMOTE_PATH.test(path);
+  if (/^(?:\\\\|\/\/)/u.test(path)) return true;
+  if (/^file:\/\//iu.test(path)) {
+    try { return /^(?:\\\\|\/\/)[^\\/]/u.test(fileURLToPath(path)); }
+    catch { return true; }
+  }
+  return /^[a-z][a-z0-9+.-]*:\/\//iu.test(path);
 }
 
 function globMatchPrefix(target: string, prefix: string): boolean {
-  if (prefix === "" || prefix === "/") return true;
-  const normalizedTarget = target.replace(/\\/gu, "/");
-  const normalizedPrefix = prefix.replace(/\\/gu, "/");
-  return normalizedTarget === normalizedPrefix || normalizedTarget.startsWith(normalizedPrefix);
+  let targetPath = target, prefixPath = prefix;
+  try {
+    if (/^file:\/\//iu.test(targetPath)) targetPath = fileURLToPath(targetPath);
+    if (/^file:\/\//iu.test(prefixPath)) prefixPath = fileURLToPath(prefixPath);
+  } catch { return false; }
+  const isWindowsAbsolute = (value: string): boolean => /^[a-z]:[\\/]/iu.test(value) || /^\\\\[^\\]/u.test(value);
+  const windowsPath = isWindowsAbsolute(targetPath) || isWindowsAbsolute(prefixPath);
+  if (windowsPath) {
+    if (!isWindowsAbsolute(targetPath) || !isWindowsAbsolute(prefixPath)) return false;
+    const remainder = win32.relative(win32.resolve(prefixPath), win32.resolve(targetPath));
+    return remainder === "" || (!win32.isAbsolute(remainder) && remainder !== ".." && !remainder.startsWith(`..${win32.sep}`));
+  }
+  if (!isAbsolute(targetPath) || !isAbsolute(prefixPath)) return false;
+  const remainder = relative(resolve(prefixPath), resolve(targetPath));
+  return remainder === "" || (!isAbsolute(remainder) && remainder !== ".." && !remainder.startsWith(`..${sep}`));
 }
 
 function operationMatches(rule: PermissionRule, operation: "read" | "write" | "execute"): boolean {
@@ -85,15 +97,20 @@ export interface PermissionDecision {
 }
 
 export function decidePermission(model: PermissionModel, member: string, path: string, operation: "read" | "write" | "execute"): PermissionDecision {
-  // Remote surfaces are never writable or executable from this plugin.
-  if (isRemotePath(path) && (operation === "write" || operation === "execute")) {
+  // This pure lexical check requires callers to resolve symlinks for both the
+  // operation target and configured roots before asking for a decision. The
+  // filesystem operation must still enforce the same root without TOCTOU gaps.
+  // A local-only policy cannot read or mutate a remote surface.
+  if (model.local_only && isRemotePath(path)) {
     return { allowed: false, rule_id: "deny-remote-surface", reason: "remote surface not permitted" };
   }
 
   const applicable: PermissionRule[] = [];
   for (const rule of model.rules) {
     if (rule.member !== "all" && rule.member !== member) continue;
-    if (!globMatchPrefix(path, rule.path_prefix ?? "")) continue;
+    if (rule.path_prefix === undefined || !rule.path_prefix.trim()) {
+      if (rule.effect !== "deny") continue;
+    } else if (!globMatchPrefix(path, rule.path_prefix)) continue;
     if (!operationMatches(rule, operation)) continue;
     applicable.push(rule);
   }
@@ -110,7 +127,9 @@ export function decidePermission(model: PermissionModel, member: string, path: s
 
 /** Reject any statement or payload that embeds credentials or placeholder tokens. */
 export function rejectsCredentials(payload: unknown): { rejected: boolean; reason: string | null } {
-  const text = JSON.stringify(payload);
+  let text: string;
+  try { text = JSON.stringify(payload); }
+  catch { return { rejected: true, reason: "payload cannot be safely serialized" }; }
   if (SECRET_MARKER.test(text)) return { rejected: true, reason: "credential or placeholder token detected" };
   return { rejected: false, reason: null };
 }
