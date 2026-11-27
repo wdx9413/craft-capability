@@ -16,7 +16,7 @@ const SECRET = /(?:api[_-]?key|authorization|cookie|password|secret|token)\s*[:=
 function text(value: unknown, name: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must not be empty`); const result = value.trim(); if (SECRET.test(result)) throw new Error(`${name} must not contain credentials or secrets`); return result; }
 function strings(value: unknown, name: string, minimum = 0): string[] { if (!Array.isArray(value)) throw new Error(`${name} must be an array`); const result = value.map((item) => text(item, name)); if (result.length < minimum || new Set(result).size !== result.length) throw new Error(`${name} must contain ${minimum ? `at least ${minimum} unique values` : "unique values"}`); return result.sort(); }
 
-function normalizeSourceLineage(value: unknown, store: CraftStore, allowReplay: boolean): JsonObject[] {
+export function normalizeSourceLineage(value: unknown, store: CraftStore, allowReplay: boolean): JsonObject[] {
   if (!Array.isArray(value)) throw new Error("source_lineage must be an array");
   const normalized = value.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`source_lineage[${index}] must be an object`);
@@ -85,6 +85,51 @@ function storedLineage(record: JsonObject, store: CraftStore): JsonObject[] | nu
   if (record.source_lineage === undefined) return null;
   try { return normalizeSourceLineage(record.source_lineage, store, true); }
   catch { throw new Error("Experience source_lineage is malformed; cleanup requires reconciliation"); }
+}
+
+function sourceReferenceKey(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const ref = value as JsonObject;
+  if (typeof ref.kind !== "string" || typeof ref.id !== "string") return null;
+  return `${ref.kind}\0${ref.id}\0${ref.version ?? ""}`;
+}
+
+function lineageReferenceKeys(lineage: JsonObject[]): Set<string> {
+  return new Set(lineage.flatMap(entry => {
+    const sourceKey = sourceReferenceKey(entry.source_ref);
+    const evidenceKeys = (entry.evidence_refs as JsonObject[]).map(sourceReferenceKey);
+    return [sourceKey, ...evidenceKeys].filter((key): key is string => key !== null);
+  }));
+}
+
+/** Remove source projections tied only to the replay occurrence being retracted. */
+function cleanReplaySourceRefs(sourceRefs: unknown, removed: JsonObject[], retained: JsonObject[], replayRunId: string): JsonObject[] {
+  if (!Array.isArray(sourceRefs)) throw new Error("Experience Learning Work Item source_refs is malformed; cleanup requires reconciliation");
+  const removedSessions = new Set(removed.map(entry => String(entry.session_id)));
+  const retainedSessions = new Set(retained.map(entry => String(entry.session_id)));
+  const removedRefs = lineageReferenceKeys(removed);
+  const retainedRefs = lineageReferenceKeys(retained);
+  const shouldRemoveRef = (value: unknown): boolean => {
+    const key = sourceReferenceKey(value);
+    return key !== null && removedRefs.has(key) && !retainedRefs.has(key);
+  };
+  return sourceRefs.flatMap(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [value as JsonObject];
+    const source = value as JsonObject;
+    const sourceRefRemoved = shouldRemoveRef(source.source_ref) || shouldRemoveRef(source);
+    const replayRunRemoved = source.replay_run_id === replayRunId
+      || source.origin === "historical_replay" && source.replay_run_id === replayRunId;
+    const sessionRemoved = typeof source.session_id === "string" && removedSessions.has(source.session_id)
+      && !retainedSessions.has(source.session_id);
+    if (sourceRefRemoved || replayRunRemoved || sessionRemoved) return [];
+    const cleaned: JsonObject = { ...source };
+    for (const key of ["trace_ref", "event_refs", "observation_refs", "evidence_refs", "source_ref"]) {
+      const valueAtKey = cleaned[key];
+      if (Array.isArray(valueAtKey)) cleaned[key] = valueAtKey.filter(ref => !shouldRemoveRef(ref));
+      else if (shouldRemoveRef(valueAtKey)) delete cleaned[key];
+    }
+    return [cleaned];
+  });
 }
 
 function replayProjectionMetadata(record: JsonObject): JsonObject {
@@ -276,7 +321,7 @@ export class WorkflowEvolutionKernel {
   historicalReplayCleanupPreview(args: JsonObject): JsonObject {
     const replayRunId = text(args.replay_run_id, "replay_run_id");
     const items: JsonObject[] = [];
-    for (const kind of ["experience_replay_candidate", "workflow_evolution_observation", "workflow_evolution_request", "workflow_evolution_proposal", "experience_procedure"]) {
+    for (const kind of ["experience_replay_candidate", "workflow_evolution_observation", "workflow_evolution_request", "workflow_evolution_proposal", "experience_procedure", "experience_learning_work_item"]) {
       for (const record of this.store.list(kind, 10_000, item => item.source_lineage !== undefined, false)) {
         const lineage = storedLineage(record, this.store)!;
         const matching = lineage.filter(item => item.origin === "historical_replay" && item.replay_run_id === replayRunId);
@@ -322,6 +367,28 @@ export class WorkflowEvolutionKernel {
         if (Number(record.version) !== Number(item.version) || lineage === null || stableDigest(lineage) !== item.lineage_digest) throw new Error("Experience replay object changed after cleanup preview");
         const retained = lineage.filter(entry => !(entry.origin === "historical_replay" && entry.replay_run_id === replayRunId));
         const patch: JsonObject = { ...payload(record), source_lineage: retained, updated_at: new Date().toISOString() };
+        if (String(item.kind) === "experience_learning_work_item") {
+          const removed = lineage.filter(entry => entry.origin === "historical_replay" && entry.replay_run_id === replayRunId);
+          const sourceRefs = cleanReplaySourceRefs(record.source_refs, removed, retained, replayRunId);
+          if (stableDigest(sourceRefs) !== stableDigest(record.source_refs)) {
+            patch.source_refs = sourceRefs;
+            patch.source_refs_cleanup_applied = true;
+          }
+          const replayRunIds = [...new Set(retained.flatMap(entry => entry.origin === "historical_replay" && typeof entry.replay_run_id === "string"
+            ? [entry.replay_run_id] : []))].sort();
+          if (replayRunIds.length === 1) patch.replay_run_id = replayRunIds[0];
+          else delete patch.replay_run_id;
+          if (!retained.length) {
+            patch.status = "revoked";
+            patch.blocked_reason = null;
+            patch.failure_reason = "source_unavailable";
+            patch.retryable = false;
+            patch.lease_owner = null;
+            patch.lease_token = null;
+            patch.lease_expires_at = null;
+            patch.active_dispatch_ref = null;
+          }
+        }
         if (!retained.length) {
           patch.status = "revoked";
           patch.routeable = false;

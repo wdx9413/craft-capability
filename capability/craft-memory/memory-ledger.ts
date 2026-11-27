@@ -195,10 +195,7 @@ export class MemoryLedgerKernel {
     const kind = text(args.kind, "kind"); if (!MEMORY_KINDS.has(kind)) throw new Error("Memory kind is unsupported");
     const sensitivity = text(args.sensitivity ?? "internal", "sensitivity"); if (!SENSITIVITIES.has(sensitivity)) throw new Error("Memory sensitivity is unsupported");
     const memoryScope = parseScope(args); const envelope = scopeEnvelope(args.scope_envelope, memoryScope); const evidenceIds = sortedUniqueList(args.evidence_ids, "evidence_ids"); evidenceIds.forEach((item) => this.store.get("evidence", item));
-    if (memoryScope.kind === "session") {
-      this.files.pathFor(memoryScope);
-      if (this.files.isSessionArchived(memoryScope.id)) throw new Error("Archived session Memory cannot be written");
-    }
+    if (memoryScope.kind !== "project" && memoryScope.kind !== "global") throw new Error("Memory writes require project or global scope");
     const content = noCredentialAssignment(text(args.content, "content"), "content"); const confidence = text(args.confidence ?? "bounded", "confidence");
     if (!CONFIDENCES.has(confidence)) throw new Error("Memory confidence is unsupported");
     if ((kind === "procedural" || confidence === "confirmed") && !evidenceIds.length) throw new Error("Procedural or confirmed Memory requires Evidence");

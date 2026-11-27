@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isAbsolute, resolve, win32 } from "node:path";
+import { isAbsolute, relative, resolve, sep, win32 } from "node:path";
+import { realpathSync } from "node:fs";
 import { stableDigest } from "craft-common-base/digest";
 import { type CraftStore, type JsonObject } from "craft-common-store-local/store";
 
@@ -11,7 +12,7 @@ export type NoteStatus = "candidate" | "confirmed" | "needs_review" | "revoked" 
 export interface CraftNoteRecord {
   id: string; subject_type: NoteSubjectType; subject_key: string; text: string; status: NoteStatus;
   version: number; evidence_refs: string[]; verified_at: string | null; created_at: string; updated_at: string;
-  device_id?: string; project_id?: string; sensitivity?: string; freshness?: "current" | "needs_review" | "path_only";
+  device_id?: string; project_id?: string; project_assignment_status?: "pending"; sensitivity?: string; freshness?: "current" | "needs_review" | "path_only";
   qualification_status?: "pending" | "qualified" | "waiting" | "rejected"; qualification_reason?: string; qualified_at?: string | null;
   qualification_pinned?: boolean;
 }
@@ -48,6 +49,7 @@ function noteRecord(value: JsonObject): CraftNoteRecord {
     evidence_refs: Array.isArray(value.evidence_refs) ? value.evidence_refs.map(String) : [],
     verified_at: value.verified_at == null ? null : String(value.verified_at), created_at: String(value.created_at), updated_at: String(value.updated_at),
     ...(value.device_id ? { device_id: String(value.device_id) } : {}), ...(value.project_id ? { project_id: String(value.project_id) } : {}),
+    ...(value.project_assignment_status === "pending" ? { project_assignment_status: "pending" as const } : {}),
     ...(value.sensitivity ? { sensitivity: String(value.sensitivity) } : {}), ...(value.freshness ? { freshness: value.freshness as CraftNoteRecord["freshness"] } : {}),
     ...(value.qualification_status ? { qualification_status: value.qualification_status as CraftNoteRecord["qualification_status"] } : {}),
     ...(value.qualification_reason ? { qualification_reason: String(value.qualification_reason) } : {}),
@@ -185,7 +187,9 @@ export class CraftNotesRegistry {
       const record = result.note as JsonObject;
       const changed = hasMetadata && oldMetadata != null && (oldMetadata.size !== meta.size || oldMetadata.modified_at !== meta.modified_at);
       const freshness = !hasMetadata ? "path_only" : changed ? "needs_review" : "current";
-      const next = { ...record, ...(changed && record.status === "confirmed" ? { status: "needs_review" } : {}), freshness,
+      const written = this.store.find("craft_note", String(record.id));
+      const projectScope = written?.notes_project_scope;
+      const next = { ...record, ...(projectScope ? { notes_project_scope: projectScope } : {}), ...(changed && record.status === "confirmed" ? { status: "needs_review" } : {}), freshness,
         file_metadata: hasMetadata ? { size: meta.size, modified_at: meta.modified_at } : oldMetadata ?? null };
       return { ...result, note: noteRecord(this.store.save("craft_note", String(record.id), next)) };
     });
@@ -202,6 +206,20 @@ export class CraftNotesRegistry {
     const task = args.task_id === undefined ? null : text(args.task_id, "task_id", 160);
     const session = args.session_id === undefined ? null : text(args.session_id, "session_id", 160);
     const project = args.project_id === undefined ? null : text(args.project_id, "project_id", 200);
+    let verifiedProject: string | undefined;
+    if (project && /^project:[a-f0-9]{64}$/u.test(project) && device === "local") {
+      const aliases = this.store.list("scope_alias", 10_000, row => row.status === "active" && row.alias_kind === "path"
+        && (row.scope as JsonObject | undefined)?.kind === "project" && (row.scope as JsonObject | undefined)?.id === project
+        && typeof row.alias === "string" && row.alias_digest === stableDigest(row.alias));
+      try {
+        const roots = [...new Set(aliases.map(row => realpathSync(String(row.alias))))];
+        const actual = realpathSync(path);
+        if (roots.length === 1) {
+          const inside = relative(roots[0]!, actual);
+          if (inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) verifiedProject = project;
+        }
+      } catch { /* unavailable paths remain pending reconciliation */ }
+    }
     const sourceLineage = args.source_lineage === undefined ? [] : normalizeNoteLineage(args.source_lineage, this.store, false);
     if (sourceLineage.some(item => item.origin !== "live_hook" || item.session_id !== session || item.task_id !== undefined && item.task_id !== task)) throw new Error("Notes usage lineage must match the live task and session");
     const evidenceRef = args.evidence_ref === undefined ? null : this.#evidenceRef(args.evidence_ref);
@@ -215,6 +233,7 @@ export class CraftNotesRegistry {
     return this.#transaction(() => {
     const previous = this.store.list("craft_note", Number.MAX_SAFE_INTEGER, r => r.subject_type === kind && r.subject_key === key)[0];
     const now = new Date().toISOString();
+    const projectScope = previous?.notes_project_scope ?? (!previous ? verifiedProject : undefined);
     if (previous?.status === "revoked") return { note: noteRecord(previous), promoted: false, reason: "revoked" };
     const existingEvent = eventId ? this.store.find("craft_note_usage", eventId) : null;
     if (existingEvent && previous) {
@@ -224,9 +243,10 @@ export class CraftNotesRegistry {
         evidence_count: Array.isArray(previous.evidence_refs) ? previous.evidence_refs.length : 0,
         session_count: this.#usageCounts(kind, key).sessions };
     }
+    if (previous && project && previous.project_id && previous.project_id !== project) throw new Error("Note path belongs to another project");
     if (eventId) {
       if (existingEvent) this.#assertObservationReplay(existingEvent, intentDigest);
-      if (!existingEvent) this.store.save("craft_note_usage", eventId, { id: eventId, subject_type: kind, subject_key: key,
+      if (!existingEvent) this.store.save("craft_note_usage", eventId, { id: eventId, subject_type: kind, subject_key: key, ...(projectScope ? { notes_project_scope: projectScope } : {}),
         ...(task ? { task_id: task } : {}), ...(session ? { session_id: session } : {}), event_type: pinned && !(task && session) ? "pin" : "usage",
         intent_digest: intentDigest, observed_at: now, ...(evidenceRef ? { evidence_ref: evidenceRef } : {}), ...(sourceLineage.length ? { source_lineage: sourceLineage } : {}) });
     }
@@ -234,7 +254,7 @@ export class CraftNotesRegistry {
     const evidenceEvents = events.filter(r => r.event_type !== "pin");
     const candidateText = this.#noteText(noteText ?? previous?.text ?? noteSeedText(path), "note");
     const candidate = previous?.status === "confirmed" ? previous : { ...(previous ?? {}), id: previous?.id ?? (typeof args.id === "string" ? args.id : `note_${randomUUID()}`), subject_type: kind,
-      subject_key: key, device_id: device, ...(project === null ? {} : { project_id: project }),
+      subject_key: key, device_id: device, ...(project === null ? {} : { project_id: project }), ...(projectScope ? { notes_project_scope: projectScope } : project && /^project:[a-f0-9]{64}$/u.test(project) ? { project_assignment_status: "pending" } : {}),
       text: candidateText,
       status: "candidate", version: Number(previous?.version ?? 0) + 1, evidence_refs: evidenceEvents.map(r => String(r.id)),
       ...(sourceLineage.length ? { source_lineage: mergeNoteLineage(Array.isArray(previous?.source_lineage) ? normalizeNoteLineage(previous.source_lineage, this.store, false) : [], sourceLineage) } : {}),
@@ -278,8 +298,8 @@ export class CraftNotesRegistry {
       const deviceRecord = device ? devices.get(device) : null;
       const deviceNote = deviceNotes.has(device);
       let status: NoteQualificationItem["status"] = "waiting";
-      let reason = "device_identity_unavailable";
-      if (deviceRecord && deviceRecord.status !== "disabled" && deviceNote) {
+      let reason = candidate.project_assignment_status === "pending" ? "project_assignment_pending" : "device_identity_unavailable";
+      if (candidate.project_assignment_status !== "pending" && deviceRecord && deviceRecord.status !== "disabled" && deviceNote) {
         try { this.#noteText(candidate.text, "note"); }
         catch {
           status = "rejected";
@@ -311,7 +331,7 @@ export class CraftNotesRegistry {
           this.store.save("craft_note", id, { ...current, qualification_status: status, qualification_reason: reason,
             qualified_at: qualifiedAt, updated_at: now });
         }
-        this.store.save("craft_note_qualification_cursor", id, { id, note_id: id, status, reason, checked_at: now });
+        this.store.save("craft_note_qualification_cursor", id, { id, note_id: id, status, reason, checked_at: now, ...(current.notes_project_scope ? { notes_project_scope: current.notes_project_scope } : {}) });
         return true;
       });
       if (!applied) {
@@ -441,6 +461,7 @@ export class CraftNotesRegistry {
       if (!previous) throw new Error(`Unknown craft_note: ${id}`);
       assertExpectedVersion(args.expected_version, previous);
       if (previous.status === "revoked") throw new Error("revoked Note cannot be confirmed");
+      if (previous.project_assignment_status === "pending") throw new Error("Note project assignment requires reconciliation");
       if (previous.status === "candidate") {
         if (previous.qualification_status !== "qualified") throw new Error("Note candidate must pass asynchronous qualification before confirmation");
         const qualifiedAt = Date.parse(String(previous.qualified_at ?? ""));
@@ -489,6 +510,10 @@ export class CraftNotesRegistry {
   }
 
   #write(payload: JsonObject): CraftNoteRecord {
+    if (payload.notes_project_scope) {
+      const current = this.store.find("craft_note", String(payload.id));
+      return noteRecord(this.store.save("craft_note", String(payload.id), { ...payload, version: Number(current?.version ?? 0) }));
+    }
     return noteRecord(this.store.save("craft_note", String(payload.id), payload));
   }
 

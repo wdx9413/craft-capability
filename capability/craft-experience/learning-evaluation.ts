@@ -4,6 +4,7 @@ import { stableDigest, payload } from 'craft-common-base/digest';
 import { lstatSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";
+import { ExperienceLearningWorkItemOwner } from "./learning-work-item.ts";
 import { AUTOMATIC_SIGNOFF_POLICY, validateReadOnlyEvaluationSteps, validateScenarioEvaluation } from "./scenario-evaluation.ts";
 import { projectExperienceDirectory } from "./project-experience-directory.ts";
 
@@ -33,13 +34,46 @@ function currentForEvaluation(store: CraftStore, procedureId: string): JsonObjec
 /** Adapter-neutral, evidence-bound orchestration for Experience qualification. */
 export class ExperienceLearningEvaluation {
   readonly store: CraftStore;
-  constructor(store: CraftStore) { this.store = store; }
+  readonly workItems: ExperienceLearningWorkItemOwner;
+  constructor(store: CraftStore) { this.store = store; this.workItems = new ExperienceLearningWorkItemOwner(store); }
+
+  setEvaluationContractSource(source: Pick<CraftStore, "get">): void {
+    this.workItems.setEvaluationContractSource(source);
+  }
+
+  /** Claim one durable Candidate item and create its exact next-stage dispatch. */
+  dispatchNext(args: JsonObject): JsonObject {
+    return this.store.transaction(() => {
+      const claim = this.workItems.claimNext(args);
+      if (claim.status !== "claimed" || !claim.work_item) return claim;
+      const item = claim.work_item as JsonObject;
+      const candidateRef = item.candidate_ref as JsonObject;
+      const dispatched = this.createDispatch({ ...args, procedure_id: candidateRef.id, work_item_id: item.id,
+        lease_token: claim.lease_token });
+      return { status: "dispatched", work_item: this.workItems.get({ work_item_id: item.id }).work_item,
+        dispatch: dispatched.dispatch, lease_token: claim.lease_token, idempotent: dispatched.idempotent };
+    });
+  }
+
+  blockWorkItem(args: JsonObject): JsonObject {
+    return this.workItems.block(args);
+  }
+
+  resumeWorkItem(args: JsonObject): JsonObject {
+    return this.workItems.resume(args);
+  }
 
   listPending(args: JsonObject = {}): JsonObject {
     const limit = args.limit === undefined ? 100 : Number(args.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) throw new Error("limit must be an integer between 1 and 1000");
     const dispatches = this.store.list("experience_evaluation_dispatch", limit, item => {
       if (item.status !== "awaiting_adapter") return false;
+      if (typeof item.learning_work_item_id === "string") {
+        const workItem = this.store.find("experience_learning_work_item", item.learning_work_item_id, undefined, false);
+        const active = workItem?.active_dispatch_ref as JsonObject | null | undefined;
+        if (!workItem || workItem.status !== "processing" || active?.id !== item.id || typeof workItem.lease_expires_at !== "string"
+          || !Number.isFinite(Date.parse(workItem.lease_expires_at)) || Date.parse(workItem.lease_expires_at) <= Date.now()) return false;
+      }
       const procedure = typeof item.procedure_id === "string"
         ? this.store.find("experience_procedure", item.procedure_id, Number(item.procedure_version), false) : null;
       return !procedure || programMemoryProcedureVisible(this.store, procedure, args.program_memory_scope_id);
@@ -52,6 +86,7 @@ export class ExperienceLearningEvaluation {
     recordEvidence: (input: JsonObject) => JsonObject, gate: (input: JsonObject) => JsonObject): JsonObject {
     const id = text(args.dispatch_id, "dispatch_id"), dispatch = this.store.get("experience_evaluation_dispatch", id);
     if (dispatch.status !== "awaiting_adapter") throw new Error("Experience evaluation dispatch is already resolved");
+    this.assertDispatchLease(dispatch, args);
     const procedure = this.store.get("experience_procedure", String(dispatch.procedure_id), Number(dispatch.procedure_version));
     if (retiredForEvaluation(this.store, procedure)) throw new Error("Experience scenario is retired; evaluation cannot execute");
     if (procedure.definition_digest !== dispatch.definition_digest) throw new Error("Experience evaluation candidate definition drifted");
@@ -143,7 +178,7 @@ export class ExperienceLearningEvaluation {
     const evidenceId = `experience_eval_evidence_${stableDigest({ dispatch: id, metadata }).slice(-20)}`;
     const evidence = recordEvidence({ evidence_id: evidenceId, source_type: "program", confidence: "confirmed",
       claim: `Pinned Experience ${stage} evaluation ${passed ? "passed" : "failed"}.`, metadata });
-    return this.result({ dispatch_id: id, evidence_ids: [String(evidence.id)] }, gate);
+    return this.result({ ...args, dispatch_id: id, evidence_ids: [String(evidence.id)] }, gate);
   }
 
   private readScenarioEvaluation(projectId: string, scenarioKey: string): ReturnType<typeof validateScenarioEvaluation> | null {
@@ -174,24 +209,33 @@ export class ExperienceLearningEvaluation {
   }
 
   dispatch(args: JsonObject): JsonObject {
+    return this.store.transaction(() => this.createDispatch(args));
+  }
+
+  private createDispatch(args: JsonObject): JsonObject {
     const procedure = this.store.get("experience_procedure", text(args.procedure_id, "procedure_id"));
     if (retiredForEvaluation(this.store, procedure)) throw new Error("Experience scenario is retired; candidate cannot be evaluated");
     if (procedure.lifecycle !== "candidate" || procedure.routeable === true) throw new Error("Only an unpublished candidate can enter automatic evaluation");
     const completed = Array.isArray(procedure.completed_gates) ? procedure.completed_gates.map(String) : [];
     const stage = STAGES.find(item => !completed.includes(item));
     if (!stage) throw new Error("Experience candidate has no remaining evaluation stage");
+    const workItem = procedure.provenance === "explicit_trace_distillation"
+      ? this.workItems.assertDispatchClaim(args, stage, procedure) : null;
     const current = currentForEvaluation(this.store, String(procedure.id));
     const identity = { procedure_id: procedure.id, procedure_version: procedure.version, definition_digest: procedure.definition_digest,
       stage, baseline_version: current?.version ?? null, scenario_signature: procedure.scenario_signature, content_free: true,
       trace_id: `experience-learning:${stableDigest({ procedure_id: procedure.id, definition_digest: procedure.definition_digest, stage, baseline_version: current?.version ?? null }).slice(-20)}`,
+      ...(workItem ? { learning_work_item_id: workItem.id, lease_token_digest: stableDigest(args.lease_token) } : {}),
       automatic_evaluator_supported: procedure.procedure_kind === "workflow" };
     const id = String(args.dispatch_id ?? `experience_evaluation_dispatch_${stableDigest(identity).slice(-20)}`);
     const prior = this.store.find("experience_evaluation_dispatch", id);
     if (prior) {
       if (prior.identity_digest !== stableDigest(identity)) throw new Error("Experience evaluation dispatch idempotency conflict");
+      if (workItem) this.workItems.attachEvaluationDispatch({ ...args, work_item_id: workItem.id, dispatch_id: id });
       return { dispatch: prior, idempotent: true };
     }
     const dispatch = this.store.create("experience_evaluation_dispatch", id, { ...identity, identity_digest: stableDigest(identity), status: "awaiting_adapter" });
+    if (workItem) this.workItems.attachEvaluationDispatch({ ...args, work_item_id: workItem.id, dispatch_id: id });
     this.store.appendEvent(`experience:${procedure.id}`, "experience.evaluation_dispatched", { dispatch_id: id, stage, trace_id: dispatch.trace_id, procedure_version: procedure.version, definition_digest: procedure.definition_digest });
     return { dispatch, idempotent: false };
   }
@@ -213,6 +257,7 @@ export class ExperienceLearningEvaluation {
       return { dispatch, gate: recordedGate, procedure, next_dispatch: null,
         current: dispatch.stage === "canary" && dispatch.status === "passed" ? activeProcedure(this.store, String(procedure.id)) : null, idempotent: true };
     }
+    this.assertDispatchLease(dispatch, args);
     const procedure = this.store.get("experience_procedure", String(dispatch.procedure_id), Number(dispatch.procedure_version));
     if (belongsToRetiredScenario(this.store, procedure)) throw new Error("Experience scenario is retired; evaluation result cannot qualify");
     if (procedure.definition_digest !== dispatch.definition_digest) throw new Error("Experience evaluation candidate definition drifted");
@@ -222,7 +267,8 @@ export class ExperienceLearningEvaluation {
     for (const evidenceId of evidenceIds) {
       const evidence = this.store.get("evidence", evidenceId);
       const metadata = evidence.metadata as JsonObject | undefined;
-      if (evidence.record_origin !== "experience_evaluator" || evidence.source_type !== "program" || evidence.confidence !== "confirmed" || metadata?.experience_evaluation_dispatch_id !== id
+      if (evidence.record_origin !== "experience_evaluator" || evidence.source_type !== "program"
+        || evidence.confidence !== "confirmed" || metadata?.experience_evaluation_dispatch_id !== id
         || metadata.procedure_id !== procedure.id || metadata.procedure_version !== procedure.version || metadata.definition_digest !== procedure.definition_digest
         || metadata.baseline_version !== dispatch.baseline_version || metadata.stage !== dispatch.stage || !["passed", "failed"].includes(String(metadata.status))
         || typeof metadata.evaluator_ref !== "string" || typeof metadata.environment_digest !== "string") {
@@ -239,16 +285,36 @@ export class ExperienceLearningEvaluation {
     const evaluationContractId = typeof args.evaluation_contract_id === "string" ? text(args.evaluation_contract_id, "evaluation_contract_id") : undefined;
     const evaluationId = typeof args.evaluation_id === "string" ? text(args.evaluation_id, "evaluation_id") : undefined;
     if (dispatch.stage === "held_out" && passed && (!evaluationContractId || !evaluationId)) throw new Error("Held-out Procedure promotion requires a trusted task-effect Evaluation Contract result");
+    if (dispatch.learning_work_item_id && dispatch.stage === "held_out" && passed) {
+      const item = this.store.get("experience_learning_work_item", String(dispatch.learning_work_item_id));
+      const contractRef = item.evaluation_contract_ref as JsonObject | null;
+      if (!contractRef || contractRef.id !== evaluationContractId) throw new Error("Held-out result must use the Learning Work Item's pre-bound Evaluation Contract");
+    }
     const gateResult = gate({ procedure_id: procedure.id, stage: dispatch.stage, passed, verdict: passed ? "adapter_evaluated_pass" : "adapter_evaluated_fail",
       evidence_ids: evidenceIds, expected_version: procedure.version,
       ...(evaluationContractId ? { evaluation_contract_id: evaluationContractId } : {}), ...(evaluationId ? { evaluation_id: evaluationId } : {}),
       gate_id: `experience_auto_gate_${stableDigest({ dispatch: id, evidenceIds, passed, evaluationContractId: evaluationContractId ?? null, evaluationId: evaluationId ?? null }).slice(-20)}` });
     const savedDispatch = this.store.save("experience_evaluation_dispatch", id, { ...payload(dispatch), status: passed ? "passed" : "failed", evidence_ids: evidenceIds,
       evaluation_contract_id: evaluationContractId ?? null, evaluation_id: evaluationId ?? null, gate_id: (gateResult.gate as JsonObject).id });
-    const next = passed && dispatch.stage !== "canary" ? this.dispatch({ procedure_id: procedure.id }) : null;
+    const learningWorkItem = typeof dispatch.learning_work_item_id === "string"
+      ? (passed ? this.workItems.advanceInTransaction({ ...args, work_item_id: dispatch.learning_work_item_id, gate_id: (gateResult.gate as JsonObject).id })
+        : this.workItems.failFromGate({ ...args, work_item_id: dispatch.learning_work_item_id, gate_id: (gateResult.gate as JsonObject).id }))
+      : null;
+    const next = passed && dispatch.stage !== "canary" && !dispatch.learning_work_item_id ? this.dispatch({ procedure_id: procedure.id }) : null;
     const updated = gateResult.procedure as JsonObject;
     this.store.appendEvent(`experience:${procedure.id}`, "experience.evaluation_result_recorded", { dispatch_id: id, gate_id: (gateResult.gate as JsonObject).id, stage: dispatch.stage, status: passed ? "passed" : "failed", evidence_ids: evidenceIds, trace_id: dispatch.trace_id });
     return { dispatch: savedDispatch, gate: gateResult.gate, procedure: updated, next_dispatch: next?.dispatch ?? null,
+      ...(learningWorkItem ? { learning_work_item: learningWorkItem.work_item } : {}),
       current: dispatch.stage === "canary" && passed ? activeProcedure(this.store, String(procedure.id)) : null, idempotent: false };
+  }
+
+  private assertDispatchLease(dispatch: JsonObject, args: JsonObject): void {
+    if (typeof dispatch.learning_work_item_id !== "string") return;
+    const item = this.store.get("experience_learning_work_item", dispatch.learning_work_item_id);
+    const active = item.active_dispatch_ref as JsonObject | null | undefined;
+    if (item.status !== "processing" || args.worker_id !== item.lease_owner || typeof args.lease_token !== "string"
+      || args.lease_token !== item.lease_token || stableDigest(args.lease_token) !== dispatch.lease_token_digest
+      || active?.id !== dispatch.id || typeof item.lease_expires_at !== "string" || !Number.isFinite(Date.parse(item.lease_expires_at))
+      || Date.parse(item.lease_expires_at) <= (typeof args.now === "string" ? Date.parse(args.now) : Date.now())) throw new Error("Experience evaluation dispatch requires its active Work Item lease");
   }
 }

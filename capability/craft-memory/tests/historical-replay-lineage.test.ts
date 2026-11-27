@@ -7,6 +7,7 @@ import { CraftStore, type JsonObject } from "craft-common-store-local/store";
 import { craftPaths } from "craft-common-store-local/paths";
 import { digestJson, stableDigest } from "craft-common-base/digest";
 import { MemoryCapture } from "../memory-capture.ts";
+import { seedLegacySession } from "./legacy-session-fixture.ts";
 import { MemoryGovernanceKernel } from "../memory-governance.ts";
 import { MemoryLedgerKernel } from "../memory-ledger.ts";
 
@@ -76,6 +77,8 @@ test("live user and observed Memory Hook captures persist exact Evidence and tas
     const observed = f.capture.captureObservedFact({ session_id: "live-observed-session", project_scope_id: "craft", turn_id: "turn-1", task_id: "task-1",
       task_source_digest: sourceDigest, content: "This project uses focused verification.", topic: "project:verification" }) as JsonObject;
     const observedCandidate = observed.candidate as JsonObject;
+    assert.deepEqual(observedCandidate.scope, { kind: "project", id: "craft" });
+    assert.equal(f.store.list("memory_observation_promotion", 20).length, 0);
     const observedLineage = (observedCandidate.source_lineage as JsonObject[])[0]!;
     assert.equal(observedLineage.origin, "live_hook");
     assert.equal(observedLineage.project_scope_id, PROJECT_SCOPE);
@@ -90,7 +93,7 @@ test("live user and observed Memory Hook captures persist exact Evidence and tas
       task_id: "task-digest", source_digest: explicitDigest, content: "This project favors reliable focused tests.", topic: "project:test-style" }) as JsonObject;
     assert.equal((((digestCapture.candidate as JsonObject).source_lineage as JsonObject[])[0]!.source_ref as JsonObject).digest, explicitDigest);
 
-    const user = f.capture.captureUserStatement({ session_id: "live-user-session", project_scope_id: PROJECT_SCOPE, turn_id: "turn-2", content: "Prefer focused verification.", topic: "project:preference" }) as JsonObject;
+    const user = f.capture.captureUserStatement({ session_id: "live-user-session", project_scope_id: "craft", turn_id: "turn-2", content: "Prefer focused verification.", topic: "project:preference" }) as JsonObject;
     const userLineage = ((user.candidate as JsonObject).source_lineage as JsonObject[])[0]!;
     assert.equal(userLineage.origin, "live_hook");
     assert.equal(userLineage.session_id, "live-user-session");
@@ -100,11 +103,34 @@ test("live user and observed Memory Hook captures persist exact Evidence and tas
   } finally { await f.close(); }
 });
 
+test("observed Memory accepts legacy Host scope and rejects mismatched project scopes", async () => {
+  const f = await fixture();
+  try {
+    const base = { session_id: "session-a", project_scope_id: "craft", content: CONTENT, topic: "project:verification" };
+    const result = f.capture.captureObservedFact({ ...base, scope_kind: "session", scope_id: "session-a" });
+    assert.deepEqual((result.candidate as JsonObject).scope, { kind: "project", id: "craft" });
+    assert.throws(() => f.capture.captureObservedFact({ ...base, scope_kind: "global" }), /project scope/u);
+    assert.throws(() => f.capture.captureObservedFact({ ...base, scope_kind: "project", scope_id: "other" }), /does not match/u);
+  } finally { await f.close(); }
+});
+
+test("rejected session Memory capture leaves no Evidence or session identity", async () => {
+  const f = await fixture();
+  try {
+    const input = { session_id: "rejected-session", session_host: "codex", scope_kind: "session", scope_id: "rejected-session", content: CONTENT };
+    assert.throws(() => f.capture.captureUserStatement(input), /project or global scope/u);
+    const internal = f.capture as unknown as { capture(args: JsonObject, origin: string): JsonObject };
+    assert.throws(() => internal.capture(input, "explicit-user-statement"), /project or global scope/u);
+    assert.equal(f.store.list("evidence", 10).length, 0);
+    assert.equal(f.store.list("session_storage_identity", 10).length, 0);
+  } finally { await f.close(); }
+});
+
 test("independent live Memory observations carry lineage into the project Ledger", async () => {
   const f = await fixture();
   try {
     const promote = (sessionId: string) => {
-      const captured = f.capture.captureObservedFact({ session_id: sessionId, project_scope_id: "craft", task_id: `${sessionId}-task`,
+      const captured = seedLegacySession(f.capture, { session_id: sessionId, project_scope_id: "craft", task_id: `${sessionId}-task`,
         turn_id: `${sessionId}-turn`, content: CONTENT, topic: "project:verification" }) as JsonObject;
       const candidate = captured.candidate as JsonObject;
       const evidence = captured.evidence as JsonObject;
@@ -130,7 +156,7 @@ test("independent live Memory observations carry lineage into the project Ledger
 test("repeated Memory promotion refuses a previously stored observation whose lineage disappeared", async () => {
   const f = await fixture();
   try {
-    const captured = f.capture.captureObservedFact({ session_id: "lineage-loss-session", project_scope_id: "craft", turn_id: "lineage-loss-turn",
+    const captured = seedLegacySession(f.capture, { session_id: "lineage-loss-session", project_scope_id: "craft", turn_id: "lineage-loss-turn",
       task_id: "lineage-loss-task", content: CONTENT, topic: "project:verification" }) as JsonObject;
     const input = { sessionId: "lineage-loss-session", projectId: "craft", candidate: captured.candidate as JsonObject, evidence: captured.evidence as JsonObject };
     const promote = () => (f.capture as unknown as { promoteRepeatedFact(input: JsonObject): JsonObject[] }).promoteRepeatedFact(input);
@@ -151,7 +177,7 @@ test("repeated Memory promotion refuses a previously stored observation whose li
 test("repeated Memory promotion uses an empty topic when a legacy candidate has no topic field", async () => {
   const f = await fixture();
   try {
-    const captured = f.capture.captureObservedFact({ session_id: "legacy-topic-session", project_scope_id: "craft", turn_id: "legacy-topic-turn",
+    const captured = seedLegacySession(f.capture, { session_id: "legacy-topic-session", project_scope_id: "craft", turn_id: "legacy-topic-turn",
       content: CONTENT, topic: "project:verification" }) as JsonObject;
     const candidate = { ...(captured.candidate as JsonObject) };
     delete candidate.topic;

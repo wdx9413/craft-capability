@@ -53,6 +53,10 @@
       "types": "./dist/learning-evaluation.d.ts",
       "default": "./dist/learning-evaluation.js"
     },
+    "./learning-work-item": {
+      "types": "./dist/learning-work-item.d.ts",
+      "default": "./dist/learning-work-item.js"
+    },
     "./ownership": {
       "types": "./dist/ownership.d.ts",
       "default": "./dist/ownership.js"

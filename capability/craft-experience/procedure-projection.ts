@@ -17,11 +17,13 @@ import { ProcedureDefinitionStore, procedureDefinitionRef, type ProcedureDefinit
 import { activeProcedure, belongsToRetiredScenario, preserveProcedureRelease, programMemoryProcedureVisible, updateProcedureRelease, selectedProcedure } from "./procedure-release.ts";
 import { syncGraphVersionManifest } from "./graph-version-manifest.ts";
 import { ProcedurePlanner, validateProcedureComposition } from "./procedure-composition.ts";
-import { scopeEnvelope } from 'craft-common-base/scope-policy';
+import { scopeAccess, scopeAllows, scopeEnvelope } from 'craft-common-base/scope-policy';
 import { validateConcept } from 'craft-common-ontology/validation';
 import { projectExperienceDirectory } from "./project-experience-directory.ts";
 import { EvaluationContractKernel } from "craft-common-log/evaluation-contract";
 import { procedureEvaluationBinding } from "./procedure-evaluation-binding.ts";
+import { captureDocumentReference, captureScriptReference } from "./script-reference.ts";
+import { captureTraceDistillationCandidate } from "./trace-distillation.ts";
 
 const STAGES = ["shadow", "held_out", "signoff", "canary"] as const;
 type Stage = typeof STAGES[number];
@@ -55,11 +57,15 @@ export class ProcedureStore {
   readonly definitions: ProcedureDefinitionStore;
   private programMemorySource: Pick<CraftStore, "get">;
   setProgramMemorySource(source: Pick<CraftStore, "get">): void { this.programMemorySource = source; }
+  private contextSource: Pick<CraftStore, "get">;
+  setContextSource(source: Pick<CraftStore, "get">): void { this.contextSource = source; }
+  private unverifiedAuthorization: (scope: string, source: JsonObject) => boolean = () => false;
+  setUnverifiedAuthorization(authorize: (scope: string, source: JsonObject) => boolean): void { this.unverifiedAuthorization = authorize; }
   private evaluationSource: Pick<CraftStore, "get">;
   setEvaluationContractSource(source: Pick<CraftStore, "get">): void { this.evaluationSource = source; }
   private evaluationVerifier: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject };
   constructor(store: CraftStore) {
-    this.store = store; this.evaluationSource = store; this.programMemorySource = store; this.definitions = new ProcedureDefinitionStore(store);
+    this.store = store; this.evaluationSource = store; this.programMemorySource = store; this.contextSource = store; this.definitions = new ProcedureDefinitionStore(store);
     this.evaluationVerifier = new EvaluationContractKernel(store);
   }
 
@@ -74,7 +80,13 @@ export class ProcedureStore {
     return this.store.transaction(() => this.captureRunbook(args));
   }
 
+  /** Save a user-requested, content-limited Candidate from exact Host Trace references. */
+  traceDistillationCapture(args: JsonObject): JsonObject {
+    return captureTraceDistillationCandidate(this.store, args, this.evaluationSource);
+  }
+
   private captureRunbook(args: JsonObject): JsonObject {
+    if (["capture_global_script", "capture_document", "capture_unverified", "no_new_learning_unverified"].includes(String(args.decision))) return this.captureDeclaredRunbook(args);
     const observationId = text(args.observation_id, "observation_id");
     const observation = this.store.get("workflow_evolution_observation", observationId);
     const source = observation.source as JsonObject | undefined;
@@ -116,10 +128,11 @@ export class ProcedureStore {
     }
     const title = text(args.title, "title");
     if (title.length > 120 || RUNBOOK_SECRET.test(title)) throw new Error("Runbook title is unsafe or too long");
+    const scriptRef = args.script_path === undefined ? undefined : captureScriptReference(this.store, scope, text(args.script_path, "script_path"));
     const signature = observation.scenario_signature as JsonObject | undefined;
     const domain = typeof signature?.domain === "string" ? signature.domain : null;
     const identity = { runbook_candidate: true, provenance: "verified_host_task", observation_id: observation.id, observation_version: observation.version,
-      session_id: source.session_id, scope, title, ...fields, evidence_ids: evidenceIds, domain, scenario_signature: signature ?? null };
+      session_id: source.session_id, scope, title, ...fields, ...(scriptRef ? { script_ref: scriptRef } : {}), evidence_ids: evidenceIds, domain, scenario_signature: signature ?? null };
     const id = `experience_procedure_runbook_${stableDigest(identity).slice(-20)}`;
     const existing = this.store.find("experience_procedure", id);
     if (existing) {
@@ -137,6 +150,84 @@ export class ProcedureStore {
     const procedure = this.store.create("experience_procedure", id, { ...identity, version: 1, lifecycle: "candidate", completed_gates: [], procedure_kind: "prompt",
       trigger: fields.applies_when, preconditions: [fields.exclude_when], allowed_effects: ["read"], acceptance_ref: fields.done_criteria,
       failure_disposition: fields.failure_handling, evidence_ids: evidenceIds, content_ref: contentRef, content_digest: contentRef.digest,
+      identity_digest: stableDigest(identity), concept_kind: "procedure", routeable: false, publication_allowed: false, execution_visible: false });
+    return { procedure, idempotent: false, advisory_only: true };
+  }
+
+  /** Save caller-declared guidance with an exact source reference. */
+  private captureDeclaredRunbook(args: JsonObject): JsonObject {
+    const isDocument = args.decision === "capture_document";
+    const isUnverified = args.decision === "capture_unverified" || args.decision === "no_new_learning_unverified";
+    const scope = isDocument || isUnverified ? text(args.scope, "scope") : "global:global";
+    if ((isDocument || isUnverified) && !/^project:[A-Za-z0-9_-]{1,96}$/u.test(scope)) throw new Error("Declared project guidance requires project scope");
+    const envelope = scopeEnvelope(args.scope_envelope, scopeRef(scope));
+    if (!scopeAllows(envelope, scopeAccess(args))) throw new Error("Global script scope or audience denied");
+    let unverifiedSource: JsonObject | undefined;
+    let priorUnverified: JsonObject | undefined;
+    if (isUnverified) {
+      const host = text(args.host, "host"), sessionId = text(args.session_id, "session_id"), turnId = text(args.turn_id, "turn_id");
+      const receiptId = text(args.context_receipt_id, "context_receipt_id");
+      if (!/^[a-z][a-z0-9_-]{0,31}$/u.test(host) || [sessionId, turnId, receiptId].some(value => value.length > 200 || /[\x00-\x1f\x7f]/u.test(value))) {
+        throw new Error("Unverified Runbook source identity is invalid");
+      }
+      const receipt = this.contextSource.get("context_resolution_receipt", receiptId);
+      const receiptScope = receipt.canonical_scope as JsonObject | undefined ?? receipt.scope as JsonObject | undefined;
+      const receiptTurn = receipt.host_turn as JsonObject | undefined;
+      if (receiptTurn?.host !== host || receiptTurn.session_id !== sessionId || receiptTurn.turn_id !== turnId
+        || receipt.status !== undefined && receipt.status !== "active"
+        || receipt.expires_at_ms !== undefined && (typeof receipt.expires_at_ms !== "number" || !Number.isFinite(receipt.expires_at_ms) || receipt.expires_at_ms <= Date.now())) {
+        throw new Error("Unverified Runbook receipt Host turn is unavailable or mismatched");
+      }
+      if (receiptScope?.kind !== "project" || typeof receiptScope.id !== "string"
+        || (receiptScope.id !== scope && `project:${receiptScope.id}` !== scope) || receipt.execution_context === false) {
+        throw new Error("Unverified Runbook receipt project scope does not match");
+      }
+      unverifiedSource = { kind: "caller_declared_host_turn", host, session_id: sessionId, turn_id: turnId, context_receipt_id: receiptId };
+      if (!this.unverifiedAuthorization(scope, { ...unverifiedSource, project_binding: args.project_binding })) throw new Error("Unverified Runbook requires trusted Host project authorization");
+      const sourceDigest = stableDigest({ scope, source: unverifiedSource });
+      const existing = this.store.list("experience_procedure", 1, item => item.unverified_source_digest === sourceDigest);
+      const decision = this.store.list("experience_runbook_decision", 1, item => item.unverified_source_digest === sourceDigest);
+      if (args.decision === "no_new_learning_unverified") {
+        if (existing.length) throw new Error("An unverified candidate already exists for this turn");
+        const reason = text(args.reason, "reason");
+        if (!["no_reusable_learning", "insufficient_evidence", "too_sensitive", "other"].includes(reason)) throw new Error("Runbook skip reason is unsupported");
+        if (decision.length) {
+          if (decision[0]!.reason !== reason) throw new Error("A different no-learning decision already exists for this turn");
+          return { decision: decision[0], idempotent: true };
+        }
+        const id = `experience_runbook_decision_${sourceDigest.slice(-20)}`;
+        return { decision: this.store.create("experience_runbook_decision", id, { scope, unverified_source_digest: sourceDigest, source_ref: unverifiedSource,
+          decision: "no_new_learning", reason, content_stored: false }), idempotent: false };
+      }
+      if (decision.length) throw new Error("A no-learning decision already exists for this turn");
+      priorUnverified = existing[0];
+    }
+    const title = text(args.title, "title");
+    const fields = {} as Record<(typeof RUNBOOK_FIELDS)[number], string>;
+    for (const field of RUNBOOK_FIELDS) {
+      const value = text(args[field], field);
+      if (value.length > (field === "synthetic_example" ? 3_000 : 1_000) || RUNBOOK_SECRET.test(value) || /[\0]/u.test(value)) throw new Error(`${field} is unsafe or exceeds its size limit`);
+      fields[field] = value;
+    }
+    if (title.length > 120 || RUNBOOK_SECRET.test(title)) throw new Error("Runbook title is unsafe or too long");
+    const sourceRef = isDocument ? captureDocumentReference(this.store, scope, text(args.source_path, "source_path"), text(args.source_excerpt, "source_excerpt")) : undefined;
+    const scriptRef = isDocument || isUnverified && args.script_path === undefined ? undefined : captureScriptReference(this.store, scope, text(args.script_path, "script_path"));
+    const identity = { runbook_candidate: true, provenance: "caller_declared", scope, scope_envelope: envelope, title, ...fields,
+      ...(unverifiedSource ? { source_ref: unverifiedSource, unverified_source_digest: stableDigest({ scope, source: unverifiedSource }) }
+        : sourceRef ? { source_ref: sourceRef } : {}), ...(scriptRef ? { script_ref: scriptRef } : {}) };
+    if (priorUnverified) {
+      if (priorUnverified.identity_digest !== stableDigest(identity)) throw new Error("A different unverified candidate already exists for this turn");
+      return { procedure: priorUnverified, idempotent: true, advisory_only: true };
+    }
+    const id = `experience_procedure_script_${stableDigest(identity).slice(-20)}`;
+    const existing = this.store.find("experience_procedure", id);
+    if (existing) return { procedure: existing, idempotent: true, advisory_only: true };
+    const body = ["# " + title, "", "> 待验证：调用方整理的内容，不授予执行权限。", "", "## 适用范围", fields.applies_when, "", "## 不适用", fields.exclude_when, "", "## 问题", fields.pitfall, "", "## 原因", fields.cause, "", "## 方法", fields.correct_method, "", "## 示例", fields.synthetic_example, "", "## 完成判据", fields.done_criteria, "", "## 失败处置", fields.failure_handling].join("\n");
+    const contentRef = this.store.contentStore.writeSync({ kind: "experience", record_id: id, version: 1, scope, status: "candidate", sensitivity: "internal",
+      source_id: "caller-declared", title, body, folder: "prompts", frontmatter: { runbook_candidate: "true", routeable: "false" } });
+    const procedure = this.store.create("experience_procedure", id, { ...identity, version: 1, lifecycle: "candidate", completed_gates: [], procedure_kind: "prompt",
+      trigger: fields.applies_when, preconditions: [fields.exclude_when], allowed_effects: ["read"], acceptance_ref: fields.done_criteria,
+      failure_disposition: fields.failure_handling, evidence_ids: [], content_ref: contentRef, content_digest: contentRef.digest,
       identity_digest: stableDigest(identity), concept_kind: "procedure", routeable: false, publication_allowed: false, execution_visible: false });
     return { procedure, idempotent: false, advisory_only: true };
   }
@@ -363,6 +454,21 @@ export class ProcedureStore {
     const id = text(args.procedure_id, "procedure_id");
     const procedure = args.release_channel === undefined ? this.store.get("experience_procedure", id, args.version === undefined ? undefined : Number(args.version)) : selectedProcedure(this.store, id, args.release_channel);
     if (!procedure) throw new Error("Procedure release unavailable");
+    if (procedure.provenance === "explicit_trace_distillation") {
+      if (!procedure.content_ref) throw new Error("Trace distillation Candidate content is unavailable");
+      if ((procedure.content_ref as JsonObject).digest !== procedure.content_digest) throw new Error("Trace distillation content digest mismatch");
+      const content = this.store.contentStore.readCompatSync(procedure.content_ref as never);
+      const active = activeProcedure(this.store, id);
+      const routeable = active !== null && active.version === procedure.version
+        && active.definition_digest === procedure.definition_digest;
+      return { procedure, candidate: {
+        status: routeable ? "已晋级" : procedure.lifecycle === "candidate" ? "待验证" : "不可用",
+        executable: false,
+        routeable,
+        ...(routeable ? { usage_mode: "read_only_guidance" } : {}),
+        body: content.body,
+      } };
+    }
     if (procedure.runbook_candidate === true && procedure.content_ref) {
       const content = this.store.contentStore.readCompatSync(procedure.content_ref as never);
       return { procedure, runbook: { status: "待验证", executable: false, body: content.body } };

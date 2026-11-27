@@ -1,16 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { stableDigest } from "craft-common-base/digest";
 import { craftPaths } from "craft-common-store-local/paths";
-import { CraftStore } from "craft-common-store-local/store";
+import { CraftStore, type JsonObject } from "craft-common-store-local/store";
+import { ExperienceLearningWorkItemOwner } from "../learning-work-item.ts";
 import { WorkflowEvolutionKernel } from "../workflow-evolution.ts";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "craft-experience-replay-"));
   const store = await new CraftStore(craftPaths(root)).open();
+  for (const id of ["billing", "other"]) {
+    const directory = join(await realpath(root), id); await mkdir(directory);
+    store.create("scope_alias", `project-${id}`, { status: "active", alias_kind: "path", alias: directory,
+      alias_digest: stableDigest(directory), scope: { kind: "project", id: `project:${id}` } });
+  }
   store.create("evidence", "history-evidence", { confidence: "unverified", source_type: "historical_session" });
   store.create("evidence", "history-evidence-2", { confidence: "unverified", source_type: "historical_session" });
   store.create("evidence", "live-evidence", { confidence: "bounded", source_type: "host_completion" });
@@ -42,6 +48,8 @@ test("Experience replay capture stores a content-free waiting candidate without 
     assert.equal(candidate.routeable, false);
     assert.equal(candidate.content_stored, false);
     assert.equal(f.store.count("workflow_evolution_observation"), 0);
+    assert.equal(f.store.count("experience_procedure"), 0, "historical replay must not synthesize an Experience Procedure");
+    assert.equal(f.store.count("experience_learning_work_item"), 0, "historical replay must not enter the asynchronous promotion queue");
     assert.equal(f.store.count("evidence"), beforeEvidence, "replay must not create a Host outcome Evidence");
     assert.deepEqual(candidate.source_lineage, lineage("run-1"));
     assert.equal("summary" in candidate, false);
@@ -129,10 +137,6 @@ test("Experience lineage rejects malformed field types, bounds, and dangling Evi
 test("WorkflowEvolution observe persists live learning-cycle source_lineage and rejects replay provenance", async () => {
   const f = await fixture();
   try {
-    const projectRoot = join(f.root, "project");
-    await mkdir(projectRoot);
-    f.store.create("scope_alias", "billing-project-root", { status: "active", alias_kind: "path", alias: projectRoot,
-      scope: { kind: "project", id: "billing" } });
     const result = f.kernel.observe({ observation_id: "live-observation", scenario_key: "scenario:billing", source_kind: "host:codex",
       source_id: "task-1", source_session_id: "live-session", source_digest: "digest-1", outcome: "passed", scope: "project:billing",
       scenario_signature: { schema: "craft.scenario-signature.v1", source: "host" }, evidence_ids: ["live-evidence"],
@@ -205,6 +209,133 @@ test("Experience replay cleanup removes only the selected run from mixed lineage
   } finally { await f.close(); }
 });
 
+test("Experience replay cleanup revokes pure replay Work Items and strips one run from mixed lineage", async () => {
+  const f = await fixture();
+  try {
+    const owner = new ExperienceLearningWorkItemOwner(f.store);
+    const createWorkItem = (id: string, sourceLineage?: JsonObject[], sourceRefs: JsonObject[] = []) => {
+      const procedure = f.store.create("experience_procedure", id, {
+        scope: "project:billing", provenance: "explicit_trace_distillation", lifecycle: "candidate",
+        version: 1, candidate_version: 1, definition_digest: `sha256:${"a".repeat(64)}`,
+        source_refs: sourceRefs, ...(sourceLineage ? { source_lineage: sourceLineage } : {}),
+        completed_gates: [], routeable: false, publication_allowed: false,
+      });
+      return owner.enqueue({
+        candidate_ref: { kind: "experience_procedure", id: String(procedure.id), version: 1, digest: String(procedure.definition_digest) },
+        scope: "project:billing", source_refs: sourceRefs, evaluation_contract_ref: null,
+      }).work_item as Record<string, unknown>;
+    };
+
+    const replayOnly = createWorkItem("procedure-work-item-replay-only", lineage("run-work-item-pure"));
+    const mixedLineage = [...lineage("run-work-item-mixed"), ...liveLineage()];
+    const nestedProjection = { origin: "live_hook", session_id: "live-session", source_ref: { kind: "host_task", id: "task-2" },
+      trace_ref: { kind: "evidence", id: "history-evidence", version: 1 },
+      event_refs: [
+        { kind: "evidence", id: "history-evidence", version: 1 },
+        { kind: "evidence", id: "live-evidence-other", version: 1 },
+        { kind: "evidence", id: 12, version: 1 },
+      ] };
+    const mixedSources: JsonObject[] = [
+      { origin: "historical_replay", replay_run_id: "run-work-item-mixed", session_id: "session-1",
+        source_ref: { kind: "host_session", id: "session-1", version: 1 },
+        evidence_refs: [{ kind: "evidence", id: "history-evidence", version: 1 }] },
+      { origin: "live_hook", session_id: "live-session", source_ref: { kind: "host_task", id: "task-1", version: 1 },
+        evidence_refs: [{ kind: "evidence", id: "live-evidence", version: 1 }] },
+      nestedProjection,
+      { origin: "historical_replay", replay_run_id: "run-work-item-retained", session_id: "session-retained",
+        source_ref: { kind: "host_task", id: 17, version: 1 } },
+      ...([null, "unstructured-source-ref", []] as unknown as JsonObject[]),
+    ];
+    const mixed = createWorkItem("procedure-work-item-mixed", mixedLineage, mixedSources);
+    const sharedReplay = createWorkItem("procedure-work-item-shared-replay", [
+      ...lineage("run-work-item-shared", "session-shared-1", "history-evidence"),
+      ...lineage("run-work-item-retained", "session-shared-2", "history-evidence-2"),
+    ]);
+    const liveOnly = createWorkItem("procedure-work-item-live-only");
+    const preview = f.kernel.historicalReplayCleanupPreview({ replay_run_id: "run-work-item-pure" });
+    assert.deepEqual((preview.items as Array<Record<string, unknown>>).filter(item => item.kind === "experience_learning_work_item")
+      .map(item => ({ id: item.id, action: item.action })),
+    [{ id: replayOnly.id, action: "revoke" }]);
+
+    f.kernel.historicalReplayCleanupApply({ replay_run_id: "run-work-item-pure", expected_manifest_digest: preview.manifest_digest });
+    const revoked = f.store.get("experience_learning_work_item", String(replayOnly.id));
+    assert.equal(revoked.status, "revoked");
+    assert.equal(revoked.failure_reason, "source_unavailable");
+    const lateGate = f.store.create("experience_procedure_gate", "late-replay-work-item-gate", {
+      procedure_id: "procedure-work-item-replay-only", stage: "shadow", passed: true, evidence_ids: ["late-evidence"],
+    });
+    assert.throws(() => owner.advance({ work_item_id: replayOnly.id, gate_id: lateGate.id }),
+      /Revoked Learning Work Item cannot advance/u);
+    assert.throws(() => owner.failFromGate({ work_item_id: replayOnly.id, gate_id: lateGate.id }),
+      /Revoked Learning Work Item cannot accept a Gate result/u);
+
+    const mixedPreview = f.kernel.historicalReplayCleanupPreview({ replay_run_id: "run-work-item-mixed" });
+    const mixedItem = (mixedPreview.items as Array<Record<string, unknown>>)
+      .find(item => item.kind === "experience_learning_work_item" && item.id === mixed.id);
+    assert.equal(mixedItem?.action, "remove_replay_lineage");
+    f.kernel.historicalReplayCleanupApply({ replay_run_id: "run-work-item-mixed", expected_manifest_digest: mixedPreview.manifest_digest });
+    const retained = f.store.get("experience_learning_work_item", String(mixed.id));
+    assert.deepEqual(retained.source_lineage, liveLineage());
+    assert.equal(retained.replay_run_id, undefined);
+    assert.equal(retained.status, "blocked", "removing replay provenance preserves the remaining Work Item state");
+    const { trace_ref: _removedTraceRef, ...cleanedNestedProjection } = nestedProjection;
+    assert.deepEqual(retained.source_refs, [mixedSources[1], {
+      ...cleanedNestedProjection,
+      event_refs: [
+        { kind: "evidence", id: "live-evidence-other", version: 1 },
+        { kind: "evidence", id: 12, version: 1 },
+      ],
+    }, mixedSources[3], null, "unstructured-source-ref", []]);
+    assert.equal(JSON.stringify(retained.source_refs).includes("run-work-item-mixed"), false,
+      "removed replay run identifiers are not left in searchable Work Item source refs");
+    assert.equal(owner.findForCandidate(mixed.candidate_ref)?.id, mixed.id,
+      "lookup resolves the preserved Work Item even though cleanup changed its mutable lineage projection");
+    const retry = owner.enqueue({
+      candidate_ref: mixed.candidate_ref, scope: "project:billing", source_refs: mixedSources, evaluation_contract_ref: null,
+    }) as { work_item: Record<string, unknown>; idempotent: boolean };
+    assert.equal(retry.idempotent, true, "retry after cleanup does not recreate a second Work Item");
+    assert.equal(retry.work_item.id, mixed.id);
+
+    const livePreview = f.kernel.historicalReplayCleanupPreview({ replay_run_id: "run-work-item-pure" });
+    assert.equal((livePreview.items as Array<Record<string, unknown>>)
+      .some(item => item.kind === "experience_learning_work_item" && item.id === liveOnly.id), false);
+
+    const sharedPreview = f.kernel.historicalReplayCleanupPreview({ replay_run_id: "run-work-item-shared" });
+    const sharedItem = (sharedPreview.items as Array<Record<string, unknown>>)
+      .find(item => item.kind === "experience_learning_work_item" && item.id === sharedReplay.id);
+    assert.equal(sharedItem?.action, "remove_replay_lineage");
+    f.kernel.historicalReplayCleanupApply({ replay_run_id: "run-work-item-shared", expected_manifest_digest: sharedPreview.manifest_digest });
+    const sharedRetained = f.store.get("experience_learning_work_item", String(sharedReplay.id));
+    assert.deepEqual(sharedRetained.source_lineage, lineage("run-work-item-retained", "session-shared-2", "history-evidence-2"));
+    assert.equal(sharedRetained.replay_run_id, "run-work-item-retained");
+    assert.equal(sharedRetained.status, "blocked");
+  } finally { await f.close(); }
+});
+
+test("Experience replay cleanup fails closed on malformed Learning Work Item source refs", async () => {
+  const f = await fixture();
+  try {
+    const item = f.store.create("experience_learning_work_item", "work-item-malformed-source-refs", {
+      scope: "project:billing",
+      status: "blocked",
+      source_lineage: lineage("run-work-item-malformed"),
+      source_refs: "not-an-array",
+    });
+    const preview = f.kernel.historicalReplayCleanupPreview({ replay_run_id: "run-work-item-malformed" });
+    assert.ok((preview.items as Array<Record<string, unknown>>)
+      .some(entry => entry.kind === "experience_learning_work_item" && entry.id === item.id));
+
+    assert.throws(() => f.kernel.historicalReplayCleanupApply({
+      replay_run_id: "run-work-item-malformed", expected_manifest_digest: preview.manifest_digest,
+    }), /source_refs is malformed; cleanup requires reconciliation/u);
+    const unchanged = f.store.get("experience_learning_work_item", String(item.id));
+    assert.equal(unchanged.version, item.version);
+    assert.equal(unchanged.source_refs, "not-an-array");
+    assert.deepEqual(unchanged.source_lineage, item.source_lineage);
+    assert.equal(f.store.count("experience_replay_cleanup_receipt"), 0);
+  } finally { await f.close(); }
+});
+
 test("Experience merges Evidence refs for a repeated lineage occurrence", async () => {
   const f = await fixture();
   try {
@@ -243,10 +374,6 @@ test("Experience replay capture rejects candidate identity collisions and confli
 test("Experience propose accepts live and legacy observations but rejects a replay observation", async () => {
   const f = await fixture();
   try {
-    const projectRoot = join(f.root, "proposal-project");
-    await mkdir(projectRoot);
-    f.store.create("scope_alias", "billing-proposal-root", { status: "active", alias_kind: "path", alias: projectRoot,
-      scope: { kind: "project", id: "billing" } });
     const signature = { schema: "craft.scenario-signature.v1", project: "project:billing", target_class: "host_task_completion" };
     const common = { scenario_key: "scenario:billing", scenario_signature: signature, outcome: "passed", scope: "project:billing",
       execution_shape: [], sanitized: true, content_stored: false };
