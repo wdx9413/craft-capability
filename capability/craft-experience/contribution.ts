@@ -1,3 +1,4 @@
+import { scriptReferenceStatus } from "./script-reference.ts";
 import { ProcedureDefinitionStore, procedureDefinitionRef } from "./procedure-definition.ts";
 import { observeOperation } from 'craft-common-log/index';
 /**
@@ -103,13 +104,14 @@ export class ExperienceContribution implements ContextContributionProvider {
         reference: `procedure:${String(candidate.procedure.id)}@${Number(candidate.procedure.version)}` }));
     // One-task Runbooks are useful only as explicitly labeled advice, never as
     // executable Procedure pointers. Keep them inside the exact project scope.
-    const projectScopes = scopes.filter(scope => scope.kind === "project");
-    const runbooks = projectScopes.length ? this.store.listScoped("experience_procedure", projectScopes, 101, procedure =>
+    const projectScopes = scopes.filter(scope => scope.kind === "project" || scope.kind === "global");
+    const runbookPage = projectScopes.length ? this.store.listScoped("experience_procedure", projectScopes, 101, procedure =>
       procedure.runbook_candidate === true && procedure.lifecycle === "candidate" && procedure.routeable !== true
       && projectScopes.some(scope => matchesScope(procedure.scope, scope))
       && scopeAllows(scopeEnvelope(procedure.scope_envelope, recordScope(procedure.scope)), access)
-      && (request.domain === undefined ? (procedure.domain ?? null) === null : procedure.domain === request.domain)) : [];
-    if (runbooks.length > 100) throw new Error("Experience Runbook candidate budget exceeded; narrow the project scope");
+      && (request.domain === undefined || procedure.domain === request.domain)) : [];
+    const runbookPartial = runbookPage.length > 100;
+    const runbooks = runbookPage.slice(0, 100);
     for (const procedure of runbooks) {
       const ref = procedure.content_ref;
       if (!ref || typeof ref !== "object") continue;
@@ -118,9 +120,11 @@ export class ExperienceContribution implements ContextContributionProvider {
       const score = wanted.reduce((sum, term) => sum + Number(retrievalText.toLowerCase().includes(term)), 0);
       if (!score) continue;
       const item: JsonObject = { kind: "experience_runbook_candidate", status: "待验证", executable: false, routeable: false,
-        scope: recordScope(procedure.scope), procedure_id: String(procedure.id), procedure_version: Number(procedure.version), title: String(procedure.title),
-        retrieval_text: retrievalText, body: String(content.body), source_observation_id: String(procedure.observation_id),
-        source_evidence_ids: procedure.evidence_ids, score };
+        scope: recordScope(procedure.scope), provenance: procedure.provenance, procedure_id: String(procedure.id), procedure_version: Number(procedure.version), title: String(procedure.title),
+        retrieval_text: retrievalText, body: String(content.body), ...(procedure.observation_id ? { source_observation_id: String(procedure.observation_id) } : {}),
+        source_evidence_ids: procedure.evidence_ids, ...(procedure.source_ref ? { source_ref: procedure.source_ref,
+          ...(typeof (procedure.source_ref as JsonObject).path === "string" && typeof (procedure.source_ref as JsonObject).digest === "string"
+            ? { source_status: scriptReferenceStatus(procedure.source_ref as JsonObject) } : {}) } : {}), ...(procedure.script_ref ? { script_ref: procedure.script_ref, script_status: scriptReferenceStatus(procedure.script_ref as JsonObject) } : {}), score };
       selected.push({ item, reference: `runbook-candidate:${String(procedure.id)}@${Number(procedure.version)}` });
     }
     const items: JsonObject[] = [];
@@ -142,9 +146,9 @@ export class ExperienceContribution implements ContextContributionProvider {
       // Content-free and reproducible: a digest of what was selected, so replaying the same
       // resolution produces the same receipt without the receipt holding the query.
       receipt_id: `experience_contribution_${selectedReferences.join("+") || "none"}`,
-      omitted_count: selected.length - items.length,
+      omitted_count: selected.length - items.length + Number(runbookPartial),
       diagnostics: { scoped_procedure_count: scoped.length, has_draft: hasDraft, routeable_count: eligible.length, candidate_count: scoped.filter(p => p.lifecycle === "candidate").length,
-        runbook_candidate_count: runbooks.length, reason: eligible.length || runbooks.length ? items.length ? "recalled_not_bound" : "query_or_budget_not_matched" : scoped.length ? "no_promoted_release" : hasDraft ? "draft_not_submitted" : "no_accessible_procedure_in_scope",
+        runbook_candidate_count: runbooks.length, partial: runbookPartial, ...(runbookPartial ? { partial_reason: "runbook_candidate_scan_limit" } : {}), reason: eligible.length || runbooks.length ? items.length ? "recalled_not_bound" : "query_or_budget_not_matched" : scoped.length ? "no_promoted_release" : hasDraft ? "draft_not_submitted" : "no_accessible_procedure_in_scope",
         next_tool: "craft_experience_graph_inspect", next_action: "diagnose", execution_started: false },
     };
   }
@@ -185,7 +189,14 @@ export class ExperienceContribution implements ContextContributionProvider {
       // Task/Policy receipt before it can read the checked body or definition.
       definition_digest: procedure.definition_digest ?? null,
       routeable: true,
-      host_next_step: procedure.procedure_kind === "graph" ? "match_graph_then_plan_and_bind" : "select_entry_exit_then_plan_and_bind",
+      ...(procedure.procedure_kind === "prompt" ? {
+        usage_mode: "read_only_guidance",
+        host_next_step: "read_promoted_prompt_content",
+        materialization_tool: "craft_experience_procedure_projection_get",
+        materialization_release_channel: "current",
+      } : {
+        host_next_step: procedure.procedure_kind === "graph" ? "match_graph_then_plan_and_bind" : "select_entry_exit_then_plan_and_bind",
+      }),
       execution_started: false,
     };
   }

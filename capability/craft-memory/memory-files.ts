@@ -70,7 +70,7 @@ export class MemoryFileStore {
   }
 
   sync(scope: { kind: string; id: string }, projectRoot?: string): JsonObject {
-    if (scope.kind === "session") return this.store.withSessionMemoryWriteGuard(scope.id, () => this.syncLocked(scope, projectRoot));
+    if (scope.kind === "session") return { status: "unavailable", reason: "session_projection_disabled", count: 0 };
     return this.syncLocked(scope, projectRoot);
   }
 

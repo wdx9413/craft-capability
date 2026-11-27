@@ -37,6 +37,7 @@ function evidenceIds(v: unknown): string[] { if (v === undefined) return []; if 
 function candidateSemanticIdentity(value: JsonObject): JsonObject {
   const { evidence_ids: _evidenceIds, source_lineage: _sourceLineage, id: _id, version: _version, created_at: _created, updated_at: _updated,
     content: _content, status: _status, conflict_ids: _conflicts, conflicting_memory_ids: _memoryConflicts, proposed_by: _proposedBy,
+    independent_evaluation_required: _evaluationRequired,
     concept_kind: _conceptKind, identity_digest: _identityDigest, review: _review, ledger_memory_id: _ledgerMemoryId, ...identity } = value;
   return identity;
 }
@@ -56,7 +57,30 @@ export function latestMemoryConfirmation(store: CraftStore, memory: JsonObject, 
 export class MemoryGovernanceKernel {
   readonly store: CraftStore;
   readonly ledger: MemoryLedgerKernel;
+  private evaluationVerifier?: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject };
   constructor(store: CraftStore, ledger: MemoryLedgerKernel) { this.store = store; this.ledger = ledger; }
+
+  setEvaluationVerifier(verifier: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject }): void {
+    this.evaluationVerifier = verifier;
+  }
+
+  private verifyIndependentEvaluation(candidate: JsonObject, binding: JsonObject): void {
+    if (!this.evaluationVerifier) throw new Error("Memory independent evaluation verifier is unavailable");
+    const candidateRef = binding.candidate_ref as JsonObject | undefined;
+    if (!candidateRef || candidateRef.kind !== "memory_candidate" || candidateRef.id !== candidate.id
+      || !Number.isSafeInteger(candidateRef.version) || candidateRef.digest !== candidate.content_digest)
+      throw new Error("Memory evaluation must bind the exact candidate");
+    const evaluated = this.store.get("memory_candidate", String(candidate.id), Number(candidateRef.version));
+    if (evaluated.identity_digest !== candidate.identity_digest || evaluated.independent_evaluation_required !== true)
+      throw new Error("Memory evaluated candidate version is unavailable or changed");
+    const verified = this.evaluationVerifier.verifyTaskEffectEvaluation({
+      contract_id: text(binding.contract_id, "contract_id"), evaluation_id: text(binding.evaluation_id, "evaluation_id"), candidate_ref: candidateRef,
+    });
+    const verifiedRef = verified.candidate_ref as JsonObject | undefined;
+    if (verified.valid !== true || verified.eligible !== true || verified.routeable !== true
+      || !verifiedRef || digest(verifiedRef) !== digest(candidateRef))
+      throw new Error("Memory independent evaluation did not pass for this candidate");
+  }
 
   policyGet(args: JsonObject = {}): JsonObject {
     const policyId = text(args.policy_id ?? "default", "policy_id");
@@ -84,6 +108,7 @@ export class MemoryGovernanceKernel {
     if (policy.mode === "off") return { candidate: null, conflicts: [], auto_committed: false, status: "disabled", policy };
     const kind = text(args.kind, "kind"); if (!KINDS.has(kind)) throw new Error("memory kind is unsupported");
     const scopeKind = text(args.scope_kind, "scope_kind"); if (!SCOPE_KINDS.has(scopeKind)) throw new Error("scope_kind is unsupported");
+    if (scopeKind !== "project" && scopeKind !== "global") throw new Error("Memory candidate requires project or global scope");
     const scopeId = text(args.scope_id, "scope_id"); const scope = { kind: scopeKind, id: scopeId }; const envelope = scopeEnvelope(args.scope_envelope, scope); const content = noSecret(text(args.content, "content"), "content");
     // The proposal path is the main way a memory is written, so it must enforce
     // the same readability contract as direct capture. Without this, a caller
@@ -92,10 +117,6 @@ export class MemoryGovernanceKernel {
     // capture; Memory tier names map onto the shared concept taxonomy the same
     // way the capture path does.
     const concept = validateConcept(mapLegacyKind("memory", kind), content);
-    if (scopeKind === "session") {
-      this.ledger.files.pathFor(scope);
-      if (this.ledger.files.isSessionArchived(scopeId)) throw new Error("Archived session Memory cannot be proposed");
-    }
     const confidence = text(args.confidence ?? "unverified", "confidence"); if (!CONFIDENCE.has(confidence)) throw new Error("confidence is unsupported");
     const ids = evidenceIds(args.evidence_ids); ids.forEach((e) => this.store.get("evidence", e));
     const sourceId = text(args.source_id, "source_id"); const source = this.store.get("knowledge_source", sourceId);
@@ -141,7 +162,8 @@ export class MemoryGovernanceKernel {
     const conflicts = topic ? this.store.listScoped("memory_candidate", [scope], 10_000, (item) => Boolean(!["rejected", "superseded", "expired"].includes(String(item.status)) && (!item.valid_until || Date.parse(String(item.valid_until)) >= nowMillis) && item.scope && JSON.stringify(item.scope) === JSON.stringify(identity.scope) && item.topic === topic && item.content_digest !== identity.content_digest)) : [];
     const conflictingMemories = topic ? this.store.listScoped("memory_ledger", [scope], 10_000, (item) => Boolean(item.status === "active" && (!item.valid_until || Date.parse(String(item.valid_until)) >= nowMillis) && item.topic === topic && item.scope && JSON.stringify(item.scope) === JSON.stringify(identity.scope) && item.content_digest !== identity.content_digest)) : [];
     const status = conflicts.length || conflictingMemories.length ? "conflict_pending" : "candidate";
-    const candidate = this.store.create("memory_candidate", candidateId, { ...identity, content, status, conflict_ids: conflicts.map((x) => x.id), conflicting_memory_ids: conflictingMemories.map((x) => x.id), proposed_by: proposer(args.proposed_by, "agent"), concept_kind: concept.kind, source_lineage: sourceLineage, identity_digest: digest(identity) });
+    const candidate = this.store.create("memory_candidate", candidateId, { ...identity, content, status, conflict_ids: conflicts.map((x) => x.id), conflicting_memory_ids: conflictingMemories.map((x) => x.id), proposed_by: proposer(args.proposed_by, "agent"), concept_kind: concept.kind, source_lineage: sourceLineage, identity_digest: digest(identity),
+      ...(args.independent_evaluation_required === true ? { independent_evaluation_required: true } : {}) });
     for (const conflict of conflicts) this.store.save("memory_candidate", String(conflict.id), { ...payload(conflict), status: "conflict_pending", conflict_ids: [...new Set([...(conflict.conflict_ids as string[] ?? []), candidate.id])] });
     const eligible = args.proposal_only !== true && !sourceLineage.some(item => item.origin === "historical_replay")
       && policy.mode === "governed" && conflicts.length === 0 && conflictingMemories.length === 0 && ids.length > 0 && ids.every((e) => {
@@ -164,11 +186,20 @@ export class MemoryGovernanceKernel {
     }
     const reviewer = text(args.reviewer, "reviewer"); const reason = noSecret(text(args.reason, "reason"), "reason");
     if (decision === "approve") {
+      if (candidate.independent_evaluation_required === true) {
+        const binding = args.evaluation_binding;
+        if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error("Memory candidate requires independent evaluation before approval");
+        if (Number(((binding as JsonObject).candidate_ref as JsonObject | undefined)?.version) !== candidate.version)
+          throw new Error("Memory evaluation must bind the current candidate version");
+        this.verifyIndependentEvaluation(candidate, binding as JsonObject);
+      }
       const ids = candidate.evidence_ids as string[]; const trusted = ids.some((e) => ["bounded", "confirmed"].includes(String(this.store.get("evidence", e).confidence)));
       if (!trusted) throw new Error("Memory candidate approval requires bounded or confirmed Evidence");
       if (candidate.status === "conflict_pending") throw new Error("Resolve Memory conflict before approval");
     }
-    const saved = this.store.save("memory_candidate", String(candidate.id), { ...payload(candidate), status: decision === "approve" ? "approved" : "rejected", review: { reviewer, reason_digest: digest(reason), reviewed_at: new Date().toISOString() } });
+    const saved = this.store.save("memory_candidate", String(candidate.id), { ...payload(candidate), status: decision === "approve" ? "approved" : "rejected",
+      ...(decision === "approve" && candidate.independent_evaluation_required === true ? { evaluation_binding: args.evaluation_binding } : {}),
+      review: { reviewer, reason_digest: digest(reason), reviewed_at: new Date().toISOString() } });
     return { candidate: saved };
   }
 
@@ -176,6 +207,11 @@ export class MemoryGovernanceKernel {
     return this.store.transaction(() => {
       const candidate = this.store.get("memory_candidate", text(args.candidate_id, "candidate_id"));
       if (candidate.status !== "approved") throw new Error("Only approved Memory candidates can enter the Ledger");
+      if (candidate.independent_evaluation_required === true) {
+        if (!candidate.evaluation_binding || typeof candidate.evaluation_binding !== "object" || Array.isArray(candidate.evaluation_binding))
+          throw new Error("Memory candidate requires independent evaluation before commit");
+        this.verifyIndependentEvaluation(candidate, candidate.evaluation_binding as JsonObject);
+      }
       if (normalizeSourceLineage(candidate.source_lineage).some(item => item.origin === "historical_replay")) {
         throw new Error("Historical Memory replay candidates cannot enter the Ledger");
       }
@@ -254,7 +290,7 @@ export class MemoryGovernanceKernel {
       const confidence = String(this.store.get("evidence", id).confidence);
       return policy.min_confidence === "bounded" ? ["bounded", "confirmed"].includes(confidence) : confidence === "confirmed";
     });
-    if (resolution === "supersede" && policy.mode === "governed" && qualityMet) {
+    if (resolution === "supersede" && policy.mode === "governed" && qualityMet && saved.independent_evaluation_required !== true) {
       const approved = this.review({ candidate_id: saved.id, decision: "approve", reviewer: "governed-conflict-resolution", reason: "Conflict explicitly resolved; governed Evidence threshold met." }).candidate as JsonObject;
       const committed = this.remember({ candidate_id: approved.id });
       return { ...committed, conflict_resolution: resolution, auto_committed: true, policy };
@@ -280,7 +316,8 @@ export class MemoryGovernanceKernel {
   sessionFinalize(args: JsonObject): JsonObject {
     const sessionId = text(args.session_id, "session_id"); const summary = noSecret(text(args.summary, "summary"), "summary");
     const candidateIds = evidenceIds(args.candidate_ids); const candidates = candidateIds.map((candidateId) => this.store.get("memory_candidate", candidateId));
-    const archive = this.ledger.files.archiveSession(sessionId, typeof args.session_host === "string" ? text(args.session_host, "session_host") : undefined);
+    if (args.session_host !== undefined) text(args.session_host, "session_host");
+    const archive = { status: "not_persisted", reason: "session_storage_disabled" };
     return { session_id: sessionId, summary_digest: digest(summary), candidates: candidates.map((candidate) => ({ candidate_id: candidate.id, status: candidate.status })), archive, content_free: true };
   }
   consolidate(args: JsonObject): JsonObject {

@@ -30,15 +30,23 @@ export class MemoryCapture {
       throw error;
     }
   }
-  captureUserStatement(args: JsonObject): JsonObject { return this.capture(args, "explicit-user-statement"); }
+  captureUserStatement(args: JsonObject): JsonObject {
+    const scopeKind = args.scope_kind ?? (args.project_scope_id ? "project" : args.session_id ? "session" : "global");
+    if (scopeKind !== "project" && scopeKind !== "global") throw new Error("Memory capture requires project or global scope");
+    const scopeId = scopeKind === "project" ? text(args.scope_id ?? args.project_scope_id, "project_scope_id") : "global";
+    if (scopeKind === "global" && args.scope_id !== undefined && args.scope_id !== "global") throw new Error("global Memory scope_id must be global");
+    if (scopeKind === "project" && args.project_scope_id !== undefined && args.project_scope_id !== scopeId) throw new Error("project Memory scope does not match project_scope_id");
+    return this.capture({ ...args, scope_kind: scopeKind, scope_id: scopeId }, "explicit-user-statement");
+  }
 
-  /** Host-classified facts enter the session tier and promote through the governed repeat thresholds. */
+  /** Host observations enter the project tier; the session is retained as source lineage. */
   captureObservedFact(args: JsonObject): JsonObject {
     const sessionId = text(args.session_id, "session_id");
     const projectScopeId = text(args.project_scope_id, "project_scope_id");
-    if (args.scope_kind !== undefined && args.scope_kind !== "session") throw new Error("observed Memory facts must start in session scope");
-    if (args.scope_id !== undefined && text(args.scope_id, "scope_id") !== sessionId) throw new Error("scope_id must match session_id");
-    return this.capture({ ...args, scope_kind: "session", scope_id: sessionId, project_scope_id: projectScopeId }, "host-observed-stable-fact");
+    if (args.scope_kind !== undefined && args.scope_kind !== "session" && args.scope_kind !== "project") throw new Error("observed Memory facts require project scope");
+    const expectedScopeId = args.scope_kind === "project" ? projectScopeId : sessionId;
+    if (args.scope_id !== undefined && text(args.scope_id, "scope_id") !== expectedScopeId) throw new Error("scope_id does not match the requested scope");
+    return this.capture({ ...args, scope_kind: "project", scope_id: projectScopeId, project_scope_id: projectScopeId }, "host-observed-stable-fact");
   }
 
   /** Create a bounded project candidate from explicitly authorized replay Evidence without entering live promotion. */
@@ -186,6 +194,7 @@ export class MemoryCapture {
     // legacy table owns the translation — the same way Knowledge does it.
     validateConcept(mapLegacyKind("memory", kind), content);
     const scopeKind = text(args.scope_kind ?? (args.session_id ? "session" : "user"), "scope_kind");
+    if (!["project", "global"].includes(scopeKind)) throw new Error("Memory capture requires project or global scope");
     const rawScopeId = text(args.scope_id ?? (scopeKind === "session" ? args.session_id : scopeKind === "global" ? "global" : "local"), "scope_id");
     const sessionHost = scopeKind === "session" && args.session_host !== undefined ? text(args.session_host, "session_host") : undefined;
     if (sessionHost) {
@@ -202,7 +211,8 @@ export class MemoryCapture {
     if (policy.mode === "off") return { candidate: null, conflicts: [], auto_committed: false, status: "disabled", policy, next_action: "memory_disabled" };
     const hints = topic === undefined && kind === "preference" ? (this.memory.topicSuggestions({ ...args, content, scope_kind: scopeKind, scope_id: scopeId }).suggestions as JsonObject[]).filter(hint => hint.content_digest !== digestJson(content)) : [];
     this.bootstrap();
-    const captureIdentity = { kind, scope_kind: scopeKind, scope_id: scopeId, project_scope_id: args.project_scope_id ?? null, topic: topic ?? null, content_digest: digestJson(content) };
+    const captureIdentity = { kind, scope_kind: scopeKind, scope_id: scopeId, project_scope_id: args.project_scope_id ?? null, topic: topic ?? null, content_digest: digestJson(content),
+      ...(proposedBy === "host-observed-stable-fact" && scopeKind === "project" ? { session_id: args.session_id } : {}) };
     const suffix = digestJson(captureIdentity).slice(-20);
     const explicit = proposedBy === "explicit-user-statement";
     const evidenceInput = { evidence_id: String(args.evidence_id ?? `evidence_memory_statement_${suffix}`), source_type: explicit ? "human" : "host_observed_fact", confidence: "bounded",
@@ -242,7 +252,9 @@ export class MemoryCapture {
     if (proposed.idempotent === true && retainedCandidate.ledger_memory_id) {
       const retained = this.memory.ledger.get({ ...args, scope_kind: scopeKind, scope_id: scopeId, memory_id: retainedCandidate.ledger_memory_id }).memory as JsonObject;
       if (retained.status === "active") {
-        return { ...proposed, memory: retained, evidence, promotions: [], already_retained: true, auto_committed: false,
+        const promotions = proposedBy === "host-observed-stable-fact" && scopeKind === "project"
+          ? this.tryPromoteGlobalFact(retainedCandidate) : [];
+        return { ...proposed, memory: retained, evidence, promotions, already_retained: true, auto_committed: false,
           next_action: scopeKind === "session" && Boolean(args.project_scope_id) ? "memory_promotion_queued" : "available_for_scoped_context" };
       }
     }
@@ -250,7 +262,9 @@ export class MemoryCapture {
     // Governed policy can already approve and commit; neither deny that fact nor commit twice.
     if (proposed.auto_committed === true) {
       const memoryFile = this.memory.ledger.files.sync({ kind: scopeKind, id: scopeId }, typeof args.project_root === "string" ? args.project_root : undefined);
-      return { ...proposed, evidence, memory_file: memoryFile, promotions: [],
+      const promotions = proposedBy === "host-observed-stable-fact" && scopeKind === "project"
+        ? this.tryPromoteGlobalFact(proposed.candidate as JsonObject) : [];
+      return { ...proposed, evidence, memory_file: memoryFile, promotions,
         next_action: scopeKind === "session" && Boolean(args.project_scope_id) ? "memory_promotion_queued" : "available_for_scoped_context" };
     }
     const candidate = proposed.candidate as JsonObject;
@@ -369,6 +383,45 @@ export class MemoryCapture {
       }
       finish(promotions.some(row => row.auto_committed === true) ? "promoted" : "observed", undefined, promotions);
     }
+    // Project candidates may be approved and committed after their original capture.
+    // Revisit them through the worker so manual review has the same global gate.
+    const projectScopes = projectId ? [{ kind: "project", id: projectId }]
+      : this.memory.store.list("scope_alias", 10_000, alias => alias.status === "active"
+        && (alias.scope as JsonObject | undefined)?.kind === "project", false)
+        .map(alias => alias.scope as { kind: string; id: string });
+    const cursorId = `memory_project_promotion_cursor_${digestJson(projectId ?? "all").slice(-32)}`;
+    const cursor = this.memory.store.find("memory_project_promotion_cursor", cursorId);
+    const lastId = typeof cursor?.last_candidate_id === "string" ? cursor.last_candidate_id : "";
+    const selectPage = (afterId: string, watermark: number) => this.memory.store.database.prepare(`
+      SELECT r.id FROM records r JOIN (
+        SELECT id, MAX(version) AS version FROM records WHERE kind='memory_candidate' AND rowid<=? GROUP BY id
+      ) latest ON latest.id=r.id AND latest.version=r.version
+      WHERE r.kind='memory_candidate' AND r.rowid<=? AND r.id>? AND EXISTS (
+        SELECT 1 FROM json_each(?) AS s
+        WHERE COALESCE(json_extract(r.payload_json,'$._memory_partition.scope.kind'), json_extract(r.payload_json,'$.scope.kind')) = json_extract(s.value,'$.kind')
+          AND COALESCE(json_extract(r.payload_json,'$._memory_partition.scope.id'), json_extract(r.payload_json,'$.scope.id')) = json_extract(s.value,'$.id')
+      ) ORDER BY r.id LIMIT ?`).all(watermark, watermark, afterId, JSON.stringify(projectScopes), limit) as Array<{ id: string }>;
+    // Freeze a high-water mark for each pass so continual inserts cannot delay wraparound.
+    const currentWatermark = () => Number((this.memory.store.database.prepare(
+      "SELECT COALESCE(MAX(rowid), 0) AS watermark FROM records",
+    ).get() as { watermark: number }).watermark);
+    let watermark = Number.isSafeInteger(cursor?.watermark) ? Number(cursor!.watermark) : currentWatermark();
+    let page = selectPage(lastId, watermark);
+    if (!page.length) {
+      watermark = currentWatermark();
+      page = selectPage("", watermark);
+    }
+    for (const reference of page) {
+      const candidate = this.memory.store.get("memory_candidate", reference.id);
+      if (candidate.proposed_by !== "host-observed-stable-fact" || candidate.status !== "approved"
+        || typeof candidate.ledger_memory_id !== "string") continue;
+      const promotions = this.tryPromoteGlobalFact(candidate);
+      if (promotions.length) items.push({ candidate_id: candidate.id, status: "observed", promotions });
+    }
+    if (page.length) this.memory.store.save("memory_project_promotion_cursor", cursorId, {
+      last_candidate_id: page[page.length - 1]!.id, watermark, content_free: true,
+    });
+
     const promoted = items.reduce((count, item) => count + (Array.isArray(item.promotions)
       ? (item.promotions as JsonObject[]).filter(row => row.auto_committed === true).length : 0), 0);
     return { processed: items.filter(item => item.status === "promoted" || item.status === "observed" || item.status === "rejected").length,
@@ -446,12 +499,51 @@ export class MemoryCapture {
         ...(governedPromotion.auto_committed === true ? { memory_file: this.memory.ledger.files.sync({ kind: "project", id: projectId }, input.projectRoot) } : {}) });
     }
 
-    const projectMemories = this.memory.store.list("memory_ledger", 10_000, row => row.status === "active" && row.content_digest === contentDigest
+    results.push(...this.promoteGlobalFact(candidate));
+    return results;
+  }
+
+  private tryPromoteGlobalFact(candidate: JsonObject): JsonObject[] {
+    try { return this.promoteGlobalFact(candidate); }
+    catch (error) {
+      return [{ tier: "global", status: "waiting", auto_committed: false, reason_code: "promotion_gate_unavailable",
+        error_type: error instanceof Error ? error.name : "unknown" }];
+    }
+  }
+
+  private promoteGlobalFact(candidate: JsonObject): JsonObject[] {
+    const results: JsonObject[] = [];
+    const contentDigest = String(candidate.content_digest ?? "");
+    const now = Date.now();
+    const matchingMemories = this.memory.store.list("memory_ledger", 10_000, row => row.status === "active" && row.content_digest === contentDigest
       && (!row.valid_until || Date.parse(String(row.valid_until)) >= now)
       && (row.scope as JsonObject | undefined)?.kind === "project" && row.kind === candidate.kind && (row.topic ?? "") === (candidate.topic ?? "")
       && this.memory.ledger.promotionSupported(row));
+    const projectMemories = [...new Map(matchingMemories.map(row => [String((row.scope as JsonObject).id), row])).values()];
     const projects = new Set(projectMemories.map(row => String((row.scope as JsonObject).id)));
     if (projects.size >= 3) {
+      const sessions = new Set<string>();
+      for (const memory of projectMemories) {
+        const lineage = normalizeSourceLineage(memory.source_lineage);
+        const scopeId = String((memory.scope as JsonObject).id);
+        const projectScope = scopeId.startsWith("project:") ? scopeId : `project:${scopeId}`;
+        const evidenceIds = new Set(Array.isArray(memory.evidence_ids) ? memory.evidence_ids.map(String) : []);
+        const verified = lineage.filter(item => item.origin === "live_hook" && item.project_scope_id === projectScope
+          && Array.isArray(item.evidence_refs) && item.evidence_refs.length > 0 && (item.evidence_refs as JsonObject[]).every(ref => {
+            if (!evidenceIds.has(String(ref.id))) return false;
+            const evidence = this.memory.store.find("evidence", String(ref.id));
+            return Boolean(evidence && evidence.version === ref.version && evidence.status !== "revoked"
+              && evidence.source_type === "host_observed_fact" && ["bounded", "confirmed"].includes(String(evidence.confidence)));
+          }));
+        if (!verified.length) return [{ tier: "global", repetition_count: projects.size, status: "waiting", auto_committed: false,
+          reason_code: "independent_project_lineage_unverified" }];
+        const memorySessions = new Set(verified.map(item => String(item.session_id)));
+        if ([...memorySessions].some(session => sessions.has(session))) {
+          return [{ tier: "global", repetition_count: projects.size, status: "rejected", auto_committed: false,
+            reason_code: "shared_session", reason: "Independent project observations require distinct Host sessions." }];
+        }
+        for (const session of memorySessions) sessions.add(session);
+      }
       const globalExisting = this.memory.store.list("memory_ledger", 10_000, row => row.status === "active" && row.content_digest === contentDigest
         && row.kind === candidate.kind && (row.topic ?? "") === (candidate.topic ?? "")
         && (row.scope as JsonObject | undefined)?.kind === "global" && this.memory.ledger.promotionSupported(row));
@@ -474,7 +566,8 @@ export class MemoryCapture {
         const globalArgs = { candidate_id: globalCandidateId, source_id: candidate.source_id, kind: candidate.kind,
           scope_kind: "global", scope_id: "global", content: candidate.content, topic: candidate.topic || undefined,
           sensitivity: candidate.sensitivity, confidence: "bounded", evidence_ids: globalEvidenceIds, proposed_by: "automatic-memory-promotion",
-          valid_until: globalValidUntil, promotion_support_refs: supportRefs, source_lineage: globalLineage };
+          valid_until: globalValidUntil, promotion_support_refs: supportRefs, source_lineage: globalLineage,
+          proposal_only: true, independent_evaluation_required: true };
         try { this.memory.ledger.validatePromotionSupport(globalArgs); }
         catch (error) {
           const sharedEvidence = error instanceof SharedPromotionEvidenceError;
@@ -484,9 +577,9 @@ export class MemoryCapture {
           return results;
         }
         const promoted = this.proposePromotion(globalArgs);
-        const governedPromotion = this.resolveRepeatedConflict(promoted, globalEvidenceIds);
+        const governedPromotion = promoted;
         results.push({ tier: "global", repetition_count: projects.size, ...governedPromotion,
-          ...(governedPromotion.auto_committed === true ? { memory_file: this.memory.ledger.files.sync({ kind: "global", id: "global" }) } : {}) });
+          evaluation_status: "pending" });
       }
     }
     return results;
