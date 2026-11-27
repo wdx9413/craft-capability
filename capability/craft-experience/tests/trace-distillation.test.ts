@@ -118,6 +118,14 @@ test("Trace distillation reads pinned Trace and events from a separate Runtime o
     assert.equal((saved.procedure as Record<string, unknown>).lifecycle, "candidate");
     assert.throws(() => f.procedures.traceDistillationCapture({ scope: "project:other", sources: input, candidate }), /scope/u);
     assert.throws(() => f.procedures.traceDistillationCapture({ scope: "project:trace-test", sources: [{ ...input[0], turn_id: "other-turn" }], candidate }), /stored identity/u);
+    for (const override of [{ host: "claude" }, { session_id: "other-session" }, { turn_id: "other-turn" },
+      { project_scope: { kind: "global", id: "global" } }, { project_scope: { kind: "project", id: "project:other" } }]) {
+      f.procedures.setTraceSource({ get(kind, id, version) {
+        const record = runtime.get(kind, id, version);
+        return kind === "trace" ? { ...record, ...override } : record;
+      } });
+      assert.throws(() => f.procedures.traceDistillationCapture({ scope: "project:trace-test", sources: input, candidate }), /stored identity/u);
+    }
   } finally { runtime.close(); await f.close(); }
 });
 
