@@ -75,7 +75,7 @@ function evidenceReference(value: unknown, store: CraftStore, source: JsonObject
   return ref;
 }
 
-function normalizeSources(value: unknown, store: CraftStore, scope: string): JsonObject[] {
+function normalizeSources(value: unknown, store: CraftStore, scope: string, traceSource: Pick<CraftStore, "get">): JsonObject[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 8) throw new Error("sources must contain one to eight Trace references");
   const sources = value.map((raw, index) => {
     const name = `sources[${index}]`, source = object(raw, name);
@@ -94,7 +94,7 @@ function normalizeSources(value: unknown, store: CraftStore, scope: string): Jso
       || terminalOutcome === "verified_passed" && traceStatus !== "completed"
       || terminalOutcome === "verified_failed" && traceStatus !== "failed") throw new Error(`${name} terminal evidence does not match the Trace status`);
     const traceRef = reference(source.trace_ref, "trace", `${name}.trace_ref`);
-    const trace = store.get("trace", String(traceRef.id), Number(traceRef.version));
+    const trace = traceSource.get("trace", String(traceRef.id), Number(traceRef.version));
     if (trace.identity_digest !== traceRef.digest || trace.task_id !== taskId || trace.status !== traceStatus) {
       throw new Error(`${name} Trace reference does not match its stored identity and status`);
     }
@@ -155,7 +155,7 @@ function normalizeSources(value: unknown, store: CraftStore, scope: string): Jso
   return sources;
 }
 
-function selectedTraceEvents(sources: JsonObject[], store: CraftStore): Map<string, JsonObject> {
+function selectedTraceEvents(sources: JsonObject[], store: Pick<CraftStore, "get">): Map<string, JsonObject> {
   const events = new Map<string, JsonObject>();
   for (const source of sources) {
     const traceRef = source.trace_ref as JsonObject;
@@ -268,13 +268,13 @@ function renderSection(title: string, value: JsonObject): string {
 
 /** Saves a provisional prompt-shaped Procedure Candidate without copying source bodies. */
 export function captureTraceDistillationCandidate(store: CraftStore, args: JsonObject,
-  evaluationContracts: Pick<CraftStore, "get"> = store): JsonObject {
+  evaluationContracts: Pick<CraftStore, "get"> = store, traceSource: Pick<CraftStore, "get"> = store): JsonObject {
   return store.transaction(() => {
     const scope = boundedText(args.scope, "scope", 110);
     if (!/^project:[A-Za-z0-9_-]{1,96}$/u.test(scope)) throw new Error("Trace distillation requires a canonical project scope");
     projectExperienceDirectory(store, scope, undefined, true);
-    const sources = normalizeSources(args.sources, store, scope);
-    const events = selectedTraceEvents(sources, store);
+    const sources = normalizeSources(args.sources, store, scope, traceSource);
+    const events = selectedTraceEvents(sources, traceSource);
     const candidate = normalizeCandidate(args.candidate, events);
     const signature = scenarioSignature(scope, sources, candidate, store);
     const requestId = args.request_id === undefined ? null : boundedText(args.request_id, "request_id", 128);

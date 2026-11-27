@@ -102,6 +102,24 @@ function sources(store: CraftStore) {
   }];
 }
 
+test("Trace distillation reads pinned Trace and events from a separate Runtime owner", async () => {
+  const f = await fixture();
+  const runtime = await new CraftStore(craftPaths(join(f.root, "runtime-owner"))).open();
+  try {
+    const input = sources(f.store);
+    for (const [kind, id] of [["trace", "trace-1"], ["trace_event", "event-1"], ["trace_event", "terminal-1"]]) {
+      const record = f.store.get(kind!, id!);
+      const { id: _id, version: _version, created_at: _created, updated_at: _updated, ...payload } = record;
+      runtime.create(kind!, id!, payload);
+      f.store.remove(kind!, id!);
+    }
+    f.procedures.setTraceSource(runtime);
+    const saved = f.procedures.traceDistillationCapture({ scope: "project:trace-test", sources: input, candidate });
+    assert.equal((saved.procedure as Record<string, unknown>).lifecycle, "candidate");
+    assert.throws(() => f.procedures.traceDistillationCapture({ scope: "project:other", sources: input, candidate }), /scope/u);
+  } finally { runtime.close(); await f.close(); }
+});
+
 test("explicit Trace distillation stores a scoped, provenance-labeled Candidate and queues the existing Learning Work Item", async () => {
   const f = await fixture();
   try {

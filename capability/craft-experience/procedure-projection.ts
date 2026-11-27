@@ -64,8 +64,9 @@ export class ProcedureStore {
   private evaluationSource: Pick<CraftStore, "get">;
   setEvaluationContractSource(source: Pick<CraftStore, "get">): void { this.evaluationSource = source; }
   private evaluationVerifier: { verifyTaskEffectEvaluation(input: JsonObject): JsonObject };
+  private traceSource: Pick<CraftStore, "get">;
   constructor(store: CraftStore) {
-    this.store = store; this.evaluationSource = store; this.programMemorySource = store; this.contextSource = store; this.definitions = new ProcedureDefinitionStore(store);
+    this.store = store; this.evaluationSource = store; this.programMemorySource = store; this.contextSource = store; this.traceSource = store; this.definitions = new ProcedureDefinitionStore(store);
     this.evaluationVerifier = new EvaluationContractKernel(store);
   }
 
@@ -82,8 +83,10 @@ export class ProcedureStore {
 
   /** Save a user-requested, content-limited Candidate from exact Host Trace references. */
   traceDistillationCapture(args: JsonObject): JsonObject {
-    return captureTraceDistillationCandidate(this.store, args, this.evaluationSource);
+    return captureTraceDistillationCandidate(this.store, args, this.evaluationSource, this.traceSource);
   }
+
+  setTraceSource(source: Pick<CraftStore, "get">): void { this.traceSource = source; }
 
   private captureRunbook(args: JsonObject): JsonObject {
     if (["capture_global_script", "capture_document", "capture_unverified", "no_new_learning_unverified"].includes(String(args.decision))) return this.captureDeclaredRunbook(args);
