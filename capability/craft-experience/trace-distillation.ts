@@ -95,7 +95,10 @@ function normalizeSources(value: unknown, store: CraftStore, scope: string, trac
       || terminalOutcome === "verified_failed" && traceStatus !== "failed") throw new Error(`${name} terminal evidence does not match the Trace status`);
     const traceRef = reference(source.trace_ref, "trace", `${name}.trace_ref`);
     const trace = traceSource.get("trace", String(traceRef.id), Number(traceRef.version));
-    if (trace.identity_digest !== traceRef.digest || trace.task_id !== taskId || trace.status !== traceStatus) {
+    const traceScope = trace.project_scope as JsonObject | undefined;
+    if (trace.identity_digest !== traceRef.digest || trace.task_id !== taskId || trace.status !== traceStatus
+      || trace.host !== "codex" || trace.session_id !== sessionId || trace.turn_id !== turnId
+      || (traceScope ? traceScope.kind !== "project" || traceScope.id !== scope : trace.project_scope_id !== scope)) {
       throw new Error(`${name} Trace reference does not match its stored identity and status`);
     }
     if (!Array.isArray(source.event_refs) || source.event_refs.length < 1 || source.event_refs.length > 512) {

@@ -117,6 +117,7 @@ test("Trace distillation reads pinned Trace and events from a separate Runtime o
     const saved = f.procedures.traceDistillationCapture({ scope: "project:trace-test", sources: input, candidate });
     assert.equal((saved.procedure as Record<string, unknown>).lifecycle, "candidate");
     assert.throws(() => f.procedures.traceDistillationCapture({ scope: "project:other", sources: input, candidate }), /scope/u);
+    assert.throws(() => f.procedures.traceDistillationCapture({ scope: "project:trace-test", sources: [{ ...input[0], turn_id: "other-turn" }], candidate }), /stored identity/u);
   } finally { runtime.close(); await f.close(); }
 });
 
